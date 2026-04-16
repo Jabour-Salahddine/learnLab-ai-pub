@@ -1,0 +1,162 @@
+version: '3.9'
+
+networks:
+  learnlab_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
+
+services:
+  # ─── Base de données ───────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: learnlab_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-learnlab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-learnlab_secure_2025}
+      POSTGRES_DB: ${POSTGRES_DB:-learnlab_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - learnlab_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Cache & Sessions ──────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: learnlab_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - learnlab_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Base vectorielle RAG ──────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: learnlab_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    networks:
+      - learnlab_network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ─── Stockage fichiers PDF ─────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: learnlab_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-learnlab_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-learnlab_minio_secret}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - learnlab_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ─── Sandbox exécution code ────────────────────────────────
+  piston:
+    image: ghcr.io/engineer-man/piston:latest
+    container_name: learnlab_piston
+    ports:
+      - "2000:2000"
+    networks:
+      - learnlab_network
+    tmpfs:
+      - /piston/jobs
+    privileged: true
+    restart: unless-stopped
+
+  # ─── Backend FastAPI ───────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: learnlab_backend
+    env_file: .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_HOST=qdrant
+      - PISTON_URL=http://piston:2000
+      - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    networks:
+      - learnlab_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ─── Frontend Vite + Bun (Lovable) ─────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: learnlab_frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "8080:8080"
+    networks:
+      - learnlab_network
+    depends_on:
+      - backend
+
+  # ─── Reverse Proxy ─────────────────────────────────────────
+  #nginx:
+    #image: nginx:alpine
+    #container_name: learnlab_nginx
+    #volumes:
+      #- ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    #ports:
+      #- "80:80"
+    #networks:
+      #- learnlab_network
+    #depends_on:
+      #- backend
+      #- frontend
