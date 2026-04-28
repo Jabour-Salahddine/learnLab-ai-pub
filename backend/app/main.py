@@ -138,6 +138,15 @@ async def _generate_weekly_reports() -> None:
 async def on_startup() -> None:
     logger.info("learnlab_api_starting", environment=settings.environment)
 
+        # ── Création automatique des tables ──────────────────────
+    from app.database import engine
+    from app.models.user import Base
+    import app.models  # noqa — enregistre tous les modèles
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("database_tables_ready")
+    # ─────────────────────────────────────────────────────────
+
     # Initialise LangGraph
     from ai_engine.graph import create_graph
     from ai_engine.llm_factory import get_llm
