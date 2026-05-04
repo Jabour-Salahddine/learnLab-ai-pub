@@ -531,6 +531,46 @@ async def get_tp_detail(
     )
 
 
+# ── GET /student/submissions/{submission_id} ──────────────────────────────────
+
+
+@router.get("/submissions/{submission_id}")
+async def get_submission_detail(
+    submission_id: uuid.UUID,
+    student: User = Depends(get_current_student),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return full detail for a specific submission (for history → result navigation)."""
+    sub: Submission | None = await db.get(Submission, submission_id)
+    if not sub or sub.student_id != student.id:
+        raise NotFoundException("Soumission introuvable")
+
+    topic_title: str | None = None
+    if sub.tp_id:
+        tp: GeneratedTPModel | None = await db.get(GeneratedTPModel, sub.tp_id)
+        if tp and tp.topic_id:
+            topic: Topic | None = await db.get(Topic, tp.topic_id)
+            if topic:
+                topic_title = topic.title
+
+    errors_data = sub.errors_json or {}
+
+    return {
+        "id": str(sub.id),
+        "submission_id": str(sub.id),
+        "tp_id": str(sub.tp_id) if sub.tp_id else None,
+        "topic_title": topic_title,
+        "score": sub.score,
+        "tests_results": errors_data.get("tests_results", []),
+        "errors_categorized": errors_data.get("errors_categorized", []),
+        "feedback": errors_data.get("feedback", ""),
+        "code_submitted": sub.code,
+        "stdout": sub.stdout,
+        "stderr": sub.stderr,
+        "created_at": sub.created_at.isoformat(),
+    }
+
+
 # ── GET /student/submissions ──────────────────────────────────────────────────
 
 

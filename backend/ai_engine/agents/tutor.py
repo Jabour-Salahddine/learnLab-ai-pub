@@ -73,17 +73,28 @@ class TutorAgent:
 
         # Fetch contextual chunks based on the error type
         error_type = _detect_error_type(state.get("stderr", ""), state.get("exit_code"))
+        tp_langage = _detect_language(state)
         chunks = await self._retriever.search(
-            query=f"comment corriger {error_type} Python",
+            query=f"comment corriger {error_type} {tp_langage} {state.get('topic_title', '')}",
             teacher_id=state["teacher_id"],
             topic_id=state.get("topic_id"),
             top_k=3,
         )
         rag_context = self._retriever.format_context(chunks)
 
+        # Format tests for readability
+        tp_tests = state.get("generated_tests") or []
+        tp_tests_str = "\n".join(
+            f"- {t.get('description', '')}: entrée={t.get('input', '')}, attendu={t.get('expected_output', '')}"
+            for t in tp_tests
+        ) or "Aucun test disponible"
+
         system_prompt = SYSTEM_TUTOR_HINT.format(
             hint_level=new_level,
-            code=state.get("code_submitted") or "",
+            tp_enonce=state.get("generated_enonce") or "Énoncé non disponible",
+            tp_tests=tp_tests_str,
+            tp_langage=tp_langage,
+            code=state.get("code_submitted") or "(aucun code soumis)",
             error_type=error_type,
             stderr=state.get("stderr") or "Aucune erreur explicite",
             rag_context=rag_context,
@@ -144,3 +155,22 @@ def _detect_error_type(stderr: str, exit_code: int | None) -> str:
     if exit_code and exit_code != 0 and not stderr:
         return "LogicError"
     return "Unknown"
+
+
+def _detect_language(state: AgentState) -> str:
+    """Detect the programming language from the TP context."""
+    starter_code = state.get("generated_starter_code", "") or ""
+    enonce = state.get("generated_enonce", "") or ""
+    topic_title = state.get("topic_title", "") or ""
+
+    text = (starter_code + enonce + topic_title).lower()
+
+    if "java" in text or "public class" in starter_code or "public static void main" in starter_code:
+        return "Java"
+    if "#include" in starter_code or "c++" in text:
+        return "C++"
+    if "library(" in starter_code or "<-" in starter_code or " r " in text:
+        return "R"
+    if "def " in starter_code or "python" in text:
+        return "Python"
+    return "Python"

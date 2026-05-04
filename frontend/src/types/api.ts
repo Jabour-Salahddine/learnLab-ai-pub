@@ -160,7 +160,32 @@ export interface RagDocument {
   topic_id: string | null;
   chunks_count: number;
   status: "pending" | "indexed" | "error";
+  visible_to_students: boolean;
   uploaded_at: string;
+}
+
+export interface StudentResource {
+  id: string;
+  filename: string;
+  file_type: string | null;
+  topic_id: string | null;
+  uploaded_at: string;
+  download_url: string;
+}
+
+export interface SubmissionDetail {
+  id: string;
+  submission_id: string;
+  tp_id: string | null;
+  topic_title: string | null;
+  score: number | null;
+  tests_results: TestResultApi[];
+  errors_categorized: ErrorItemApi[];
+  feedback: string;
+  code_submitted: string | null;
+  stdout: string | null;
+  stderr: string | null;
+  created_at: string;
 }
 
 // ── Teacher ───────────────────────────────────────────────────────────────────

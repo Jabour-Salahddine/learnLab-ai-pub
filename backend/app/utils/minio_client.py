@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+from datetime import timedelta
 
 import structlog
 from minio import Minio
@@ -64,3 +65,21 @@ async def delete_file(object_name: str) -> None:
             logger.warning("minio_delete_failed", object=object_name, error=str(exc))
     except Exception as exc:
         logger.warning("minio_delete_failed", object=object_name, error=str(exc))
+
+
+def _presigned_url_sync(object_name: str, expires_seconds: int = 3600) -> str:
+    c = _client()
+    return c.presigned_get_object(
+        settings.minio_bucket,
+        object_name,
+        expires=timedelta(seconds=expires_seconds),
+    )
+
+
+async def get_presigned_url(object_name: str, expires_seconds: int = 3600) -> str:
+    """Generate a presigned GET URL for a MinIO object (1h default TTL)."""
+    try:
+        return await asyncio.to_thread(_presigned_url_sync, object_name, expires_seconds)
+    except Exception as exc:
+        logger.warning("minio_presign_failed", object=object_name, error=str(exc))
+        return ""

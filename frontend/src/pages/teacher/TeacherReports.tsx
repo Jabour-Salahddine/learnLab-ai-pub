@@ -13,7 +13,7 @@ import {
 import { useStudents } from "@/hooks/useTeacher";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { BarChart3, FileText, Loader2, RefreshCw } from "lucide-react";
+import { BarChart3, Download, FileText, Loader2, RefreshCw } from "lucide-react";
 
 interface StudentReport {
   id: string;
@@ -204,6 +204,31 @@ const TeacherReports = () => {
           {selectedReport && (
             <div className="mt-4 text-sm text-foreground whitespace-pre-wrap leading-relaxed bg-muted/30 rounded-lg p-4">
               {selectedReport.content}
+            </div>
+          )}
+
+          {selectedReport && (
+            <div className="mt-4 flex justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const win = window.open("", "_blank");
+                  if (!win) return;
+                  win.document.write(
+                    `<html><head><title>Rapport — ${selectedStudentName}</title>
+                    <style>body{font-family:sans-serif;padding:2rem;line-height:1.6;white-space:pre-wrap}</style></head>
+                    <body><h2>Rapport IA — ${selectedStudentName}</h2>
+                    <p style="color:#666">Période : ${formatDate(selectedReport.period_start)} → ${formatDate(selectedReport.period_end)}</p>
+                    <hr/><pre>${selectedReport.content}</pre></body></html>`
+                  );
+                  win.document.close();
+                  win.print();
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Télécharger PDF
+              </Button>
             </div>
           )}
         </DialogContent>

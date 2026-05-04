@@ -19,6 +19,7 @@ class DocumentItem(BaseModel):
     topic_id: uuid.UUID | None
     chunks_count: int
     status: str
+    visible_to_students: bool = False
     uploaded_at: datetime
 
     model_config = {"from_attributes": True}

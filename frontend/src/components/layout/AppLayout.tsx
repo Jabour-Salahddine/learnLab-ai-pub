@@ -6,7 +6,7 @@ import { useNotifications } from "@/context/NotificationContext";
 import {
   LayoutDashboard, BookOpen, History, User, Settings, LogOut,
   Bell, Moon, Sun, ChevronLeft, ChevronRight, Brain,
-  Users, Database, BarChart3, X, CheckCheck,
+  Users, Database, BarChart3, X, CheckCheck, Library,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ const studentNav = [
   { label: "Tableau de bord", icon: LayoutDashboard, path: "/student/dashboard" },
   { label: "TPs disponibles", icon: BookOpen, path: "/student/tps" },
   { label: "Mon historique", icon: History, path: "/student/history" },
+  { label: "Ressources du cours", icon: Library, path: "/student/resources" },
   { label: "Mon profil", icon: User, path: "/student/profile" },
   { label: "Paramètres", icon: Settings, path: "/student/settings" },
 ];

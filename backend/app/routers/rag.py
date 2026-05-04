@@ -4,18 +4,18 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_teacher, get_current_user
+from app.dependencies import get_current_student, get_current_teacher, get_current_user
 from app.models.enrollment import StudentEnrollment
 from app.models.rag_document import RagDocument
 from app.models.user import User
 from app.schemas.rag import CollectionStats, DocumentItem, DocumentUploadResponse
 from app.utils.exceptions import BadRequestException, ForbiddenException, NotFoundException
-from app.utils.minio_client import delete_file, upload_file
+from app.utils.minio_client import delete_file, get_presigned_url, upload_file
 from rag_pipeline.indexer import DocumentIndexer
 
 logger = structlog.get_logger(__name__)
@@ -72,6 +72,7 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     topic_id: str | None = Form(default=None),
+    visible_to_students: bool = Form(default=False),
     teacher: User = Depends(get_current_teacher),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentUploadResponse:
@@ -113,6 +114,7 @@ async def upload_document(
         topic_id=topic_uuid,
         qdrant_collection=f"teacher_{teacher.id}",
         status="pending",
+        visible_to_students=visible_to_students,
     )
     db.add(doc)
     await db.commit()
@@ -152,6 +154,74 @@ async def list_documents(
     )
     docs = result.scalars().all()
     return [DocumentItem.model_validate(d) for d in docs]
+
+
+# ── GET /rag/documents/student-resources ─────────────────────────────────────
+
+
+@router.get("/documents/student-resources")
+async def student_resources(
+    student: User = Depends(get_current_student),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Return documents marked visible_to_students for the enrolled teacher."""
+    # Get the student's teacher(s)
+    enroll_res = await db.execute(
+        select(StudentEnrollment.teacher_id)
+        .where(StudentEnrollment.student_id == student.id)
+        .limit(1)
+    )
+    row = enroll_res.first()
+    if not row:
+        return []
+    teacher_id = row[0]
+
+    result = await db.execute(
+        select(RagDocument)
+        .where(
+            RagDocument.teacher_id == teacher_id,
+            RagDocument.visible_to_students.is_(True),
+        )
+        .order_by(RagDocument.uploaded_at.desc())
+    )
+    docs = result.scalars().all()
+
+    resources = []
+    for doc in docs:
+        object_name = f"{doc.teacher_id}/{doc.filename}"
+        download_url = await get_presigned_url(object_name, expires_seconds=3600)
+        resources.append({
+            "id": str(doc.id),
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "topic_id": str(doc.topic_id) if doc.topic_id else None,
+            "uploaded_at": doc.uploaded_at.isoformat(),
+            "download_url": download_url,
+        })
+    return resources
+
+
+# ── PUT /rag/documents/{document_id}/visibility ───────────────────────────────
+
+
+@router.put("/documents/{document_id}/visibility")
+async def update_visibility(
+    document_id: uuid.UUID,
+    visible_to_students: bool = Body(..., embed=True),
+    teacher: User = Depends(get_current_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Toggle whether a document is visible to enrolled students."""
+    doc: RagDocument | None = await db.get(RagDocument, document_id)
+    if not doc:
+        raise NotFoundException("Document introuvable")
+    if doc.teacher_id != teacher.id:
+        raise ForbiddenException("Ce document ne vous appartient pas")
+
+    doc.visible_to_students = visible_to_students
+    await db.commit()
+    await db.refresh(doc)
+    return DocumentItem.model_validate(doc).model_dump()
 
 
 # ── DELETE /rag/documents/{document_id} ──────────────────────────────────────

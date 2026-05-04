@@ -8,7 +8,7 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -58,6 +58,16 @@ async def create_invitation_code(
     teacher: User = Depends(get_current_teacher),
     db: AsyncSession = Depends(get_db),
 ) -> InvitationCodeResponse:
+    # Deactivate all previous active codes for this teacher
+    await db.execute(
+        update(InvitationCode)
+        .where(
+            InvitationCode.teacher_id == teacher.id,
+            InvitationCode.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
+
     for _ in range(10):
         code_str = _generate_code(teacher)
         existing = await db.execute(

@@ -3,6 +3,7 @@
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from ai_engine.agents.tutor import _detect_language
 from ai_engine.prompts.explainer_prompts import SYSTEM_EXPLAINER
 from ai_engine.state import AgentState
 from rag_pipeline.retriever import RAGRetriever
@@ -30,6 +31,9 @@ class ExplainerAgent:
             student_level=state.get("student_level", 1),
             question=question,
             rag_context=rag_context,
+            topic_title=state.get("topic_title") or "Non spécifié",
+            tp_enonce=state.get("generated_enonce") or "Énoncé non disponible",
+            tp_langage=_detect_language(state),
         )
 
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=question)]

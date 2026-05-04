@@ -48,8 +48,10 @@ export function useInvitationCodes() {
   const generateMutation = useMutation({
     mutationFn: (maxUses = 100) =>
       api.post<InvitationCode>("/teacher/invitation-codes", { max_uses: maxUses }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["invitation-codes"] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["invitation-codes"] });
+      await queryClient.refetchQueries({ queryKey: ["invitation-codes"] });
+    },
   });
 
   return {
@@ -70,10 +72,11 @@ export function useRAGDocuments() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: ({ file, topicId }: { file: File; topicId?: string }) => {
+    mutationFn: ({ file, topicId, visibleToStudents }: { file: File; topicId?: string; visibleToStudents?: boolean }) => {
       const formData = new FormData();
       formData.append("file", file);
       if (topicId) formData.append("topic_id", topicId);
+      formData.append("visible_to_students", String(visibleToStudents ?? false));
       return api.upload<RagDocument>("/rag/documents/upload", formData);
     },
     onSuccess: () =>
@@ -86,6 +89,13 @@ export function useRAGDocuments() {
       queryClient.invalidateQueries({ queryKey: ["rag-documents"] }),
   });
 
+  const updateVisibilityMutation = useMutation({
+    mutationFn: ({ id, visible }: { id: string; visible: boolean }) =>
+      api.put<RagDocument>(`/rag/documents/${id}/visibility`, { visible_to_students: visible }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["rag-documents"] }),
+  });
+
   return {
     documents: data ?? [],
     isLoading,
@@ -93,6 +103,7 @@ export function useRAGDocuments() {
     isUploading: uploadMutation.isPending,
     deleteDocument: deleteMutation.mutateAsync,
     isDeleting: deleteMutation.isPending,
+    updateDocumentVisibility: updateVisibilityMutation.mutateAsync,
   };
 }
 

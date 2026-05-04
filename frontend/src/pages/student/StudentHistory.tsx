@@ -150,18 +150,14 @@ const StudentHistory = () => {
                 </Badge>
 
                 {/* Action */}
-                {sub.tp_id && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-muted-foreground hover:text-foreground flex-shrink-0"
-                    onClick={() => navigate(`/student/result/${sub.tp_id}`, {
-                      state: { from_history: true, submission_id: sub.id }
-                    })}
-                  >
-                    Voir <ArrowRight className="w-4 h-4 ml-1" />
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-foreground flex-shrink-0"
+                  onClick={() => navigate(`/student/result/${sub.id}`)}
+                >
+                  Voir <ArrowRight className="w-4 h-4 ml-1" />
+                </Button>
               </div>
             ))}
           </div>

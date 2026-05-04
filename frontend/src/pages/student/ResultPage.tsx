@@ -1,17 +1,36 @@
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ArrowRight, Check, X, Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, ResponsiveContainer } from "recharts";
 import { useEffect, useState } from "react";
-import type { SubmitResponse } from "@/types/api";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import type { SubmitResponse, SubmissionDetail } from "@/types/api";
 
 const ResultPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const result = location.state?.result as SubmitResponse | undefined;
-  const score = result?.score ?? 0;
+  const { id } = useParams<{ id: string }>();
+
+  // Case 1: came from submit — data is in location.state.result
+  const resultFromState = location.state?.result as SubmitResponse | undefined;
+
+  // Case 2: came from history — fetch from API using the submission id in the URL
+  const { data: submissionDetail, isLoading } = useQuery<SubmissionDetail>({
+    queryKey: ["submission-detail", id],
+    queryFn: () => api.get<SubmissionDetail>(`/student/submissions/${id}`),
+    enabled: !resultFromState && !!id,
+    staleTime: 60_000,
+  });
+
+  // Normalise into a common shape regardless of source
+  const score = resultFromState?.score ?? submissionDetail?.score ?? 0;
+  const testsResults = resultFromState?.tests_results ?? submissionDetail?.tests_results ?? [];
+  const errorsCategorized = resultFromState?.errors_categorized ?? submissionDetail?.errors_categorized ?? [];
+  const feedback = resultFromState?.feedback ?? submissionDetail?.feedback ?? "";
 
   const [displayScore, setDisplayScore] = useState(0);
 
@@ -19,7 +38,10 @@ const ResultPage = () => {
     let current = 0;
     const interval = setInterval(() => {
       current += 1;
-      if (current >= score) { clearInterval(interval); current = score; }
+      if (current >= score) {
+        clearInterval(interval);
+        current = score;
+      }
       setDisplayScore(current);
     }, 20);
     return () => clearInterval(interval);
@@ -35,6 +57,21 @@ const ResultPage = () => {
   const scoreBg = score >= 70 ? "from-success/20 to-success/5" : "from-warning/20 to-warning/5";
   const scoreColor = score >= 70 ? "text-success" : "text-warning";
 
+  if (!resultFromState && isLoading) {
+    return (
+      <AppLayout>
+        <div className="max-w-5xl mx-auto space-y-6">
+          <Skeleton className="h-56 rounded-xl" />
+          <div className="grid grid-cols-3 gap-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-64 rounded-xl" />
+            ))}
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
       <div className="max-w-5xl mx-auto space-y-6">
@@ -43,13 +80,28 @@ const ResultPage = () => {
           <div className="relative w-32 h-32 mx-auto mb-4">
             <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
               <circle cx="60" cy="60" r="50" fill="none" stroke="hsl(var(--muted))" strokeWidth="8" />
-              <circle cx="60" cy="60" r="50" fill="none" stroke="hsl(var(--primary))" strokeWidth="8" strokeDasharray={`${(displayScore / 100) * 314} 314`} strokeLinecap="round" className="transition-all duration-100" />
+              <circle
+                cx="60"
+                cy="60"
+                r="50"
+                fill="none"
+                stroke="hsl(var(--primary))"
+                strokeWidth="8"
+                strokeDasharray={`${(displayScore / 100) * 314} 314`}
+                strokeLinecap="round"
+                className="transition-all duration-100"
+              />
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
               <span className={`text-3xl font-bold ${scoreColor}`}>{displayScore}</span>
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-foreground">{score >= 70 ? "Bien joué !" : "À améliorer"}</h1>
+          <h1 className="text-2xl font-bold text-foreground">
+            {score >= 70 ? "Bien joué !" : "À améliorer"}
+          </h1>
+          {submissionDetail?.topic_title && (
+            <p className="text-sm text-muted-foreground mt-1">{submissionDetail.topic_title}</p>
+          )}
           {score >= 70 && (
             <div className="flex items-center justify-center gap-2 mt-3">
               <Trophy className="w-5 h-5 text-warning" />
@@ -63,14 +115,25 @@ const ResultPage = () => {
           {/* Tests */}
           <div className="bg-card border border-border rounded-xl p-5">
             <h3 className="font-semibold text-foreground mb-4">Tests unitaires</h3>
-            {result?.tests_results && result.tests_results.length > 0 ? (
+            {testsResults.length > 0 ? (
               <div className="space-y-2">
-                {result.tests_results.map((t, i) => (
-                  <div key={i} className={`flex items-start gap-2 p-2.5 rounded-lg text-sm ${t.passed ? "bg-success/5" : "bg-destructive/5"}`}>
-                    {t.passed ? <Check className="w-4 h-4 text-success mt-0.5 flex-shrink-0" /> : <X className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />}
+                {testsResults.map((t, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-2 p-2.5 rounded-lg text-sm ${
+                      t.passed ? "bg-success/5" : "bg-destructive/5"
+                    }`}
+                  >
+                    {t.passed ? (
+                      <Check className="w-4 h-4 text-success mt-0.5 flex-shrink-0" />
+                    ) : (
+                      <X className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
+                    )}
                     <div>
                       <p className="text-foreground font-medium">{t.description}</p>
-                      {t.actual && <p className="text-xs text-muted-foreground mt-0.5">→ {t.actual}</p>}
+                      {t.actual && (
+                        <p className="text-xs text-muted-foreground mt-0.5">→ {t.actual}</p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -86,14 +149,24 @@ const ResultPage = () => {
             <ResponsiveContainer width="100%" height={200}>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="hsl(var(--border))" />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} />
-                <Radar dataKey="value" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.2} />
+                <PolarAngleAxis
+                  dataKey="metric"
+                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                />
+                <Radar
+                  dataKey="value"
+                  stroke="hsl(var(--primary))"
+                  fill="hsl(var(--primary))"
+                  fillOpacity={0.2}
+                />
               </RadarChart>
             </ResponsiveContainer>
-            {result?.errors_categorized && result.errors_categorized.length > 0 && (
+            {errorsCategorized.length > 0 && (
               <div className="flex flex-wrap gap-2 mt-2">
-                {result.errors_categorized.map((e, i) => (
-                  <Badge key={i} variant="destructive" className="text-xs">{e.type}</Badge>
+                {errorsCategorized.map((e, i) => (
+                  <Badge key={i} variant="destructive" className="text-xs">
+                    {e.type}
+                  </Badge>
                 ))}
               </div>
             )}
@@ -103,9 +176,12 @@ const ResultPage = () => {
           <div className="bg-card border border-border rounded-xl p-5">
             <h3 className="font-semibold text-foreground mb-4">Ce que l'IA vous recommande</h3>
             <div className="space-y-3">
-              {result?.errors_categorized && result.errors_categorized.length > 0 ? (
-                result.errors_categorized.map((e, i) => (
-                  <div key={i} className="flex items-start gap-2 p-2.5 bg-primary/5 rounded-lg text-sm">
+              {errorsCategorized.length > 0 ? (
+                errorsCategorized.map((e, i) => (
+                  <div
+                    key={i}
+                    className="flex items-start gap-2 p-2.5 bg-primary/5 rounded-lg text-sm"
+                  >
                     <span className="text-primary mt-0.5">💡</span>
                     <span className="text-foreground">{e.description}</span>
                   </div>
@@ -114,7 +190,9 @@ const ResultPage = () => {
                 <div className="flex items-start gap-2 p-2.5 bg-primary/5 rounded-lg text-sm">
                   <span className="text-primary mt-0.5">💡</span>
                   <span className="text-foreground">
-                    {score >= 70 ? "Excellent travail ! Continuez à pratiquer pour maintenir ce niveau." : "Revoyez les concepts fondamentaux et réessayez."}
+                    {score >= 70
+                      ? "Excellent travail ! Continuez à pratiquer pour maintenir ce niveau."
+                      : "Revoyez les concepts fondamentaux et réessayez."}
                   </span>
                 </div>
               )}
@@ -122,7 +200,11 @@ const ResultPage = () => {
             <div className="mt-4 p-3 bg-accent/5 border border-accent/20 rounded-lg">
               <p className="text-xs text-muted-foreground mb-2">Prochain TP suggéré</p>
               <p className="text-sm font-semibold text-foreground">Continuez à progresser</p>
-              <Button size="sm" className="mt-2 gradient-primary text-primary-foreground" onClick={() => navigate("/student/tps")}>
+              <Button
+                size="sm"
+                className="mt-2 gradient-primary text-primary-foreground"
+                onClick={() => navigate("/student/tps")}
+              >
                 Voir les TPs <ArrowRight className="w-3 h-3 ml-1" />
               </Button>
             </div>
@@ -130,11 +212,13 @@ const ResultPage = () => {
         </div>
 
         {/* Feedback */}
-        {result?.feedback && (
+        {feedback && (
           <div className="bg-card border border-border rounded-xl p-5">
-            <h3 className="font-semibold text-foreground mb-3">Feedback détaillé de l'Agent Tuteur</h3>
+            <h3 className="font-semibold text-foreground mb-3">
+              Feedback détaillé de l'Agent Tuteur
+            </h3>
             <div className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">
-              {result.feedback}
+              {feedback}
             </div>
           </div>
         )}

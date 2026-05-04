@@ -15,6 +15,7 @@ import ResultPage from "@/pages/student/ResultPage";
 import StudentProfile from "@/pages/student/StudentProfile";
 import StudentHistory from "@/pages/student/StudentHistory";
 import StudentSettings from "@/pages/student/StudentSettings";
+import StudentResources from "@/pages/student/StudentResources";
 import TeacherDashboard from "@/pages/teacher/TeacherDashboard";
 import StudentManagement from "@/pages/teacher/StudentManagement";
 import TPManagement from "@/pages/teacher/TPManagement";
@@ -73,6 +74,7 @@ const AppRoutes = () => (
       <Route path="/student/profile" element={<StudentProfile />} />
       <Route path="/student/history" element={<StudentHistory />} />
       <Route path="/student/settings" element={<StudentSettings />} />
+      <Route path="/student/resources" element={<StudentResources />} />
     </Route>
 
     {/* Teacher routes */}

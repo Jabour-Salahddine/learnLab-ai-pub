@@ -51,12 +51,19 @@ async def chat_endpoint(
 
     # Load TP info from DB to get teacher_id and context
     from app.database import AsyncSessionLocal
+    from app.models.topic import Topic
     from app.models.tp import GeneratedTP
     from sqlalchemy import select
 
+    topic_title_cached: str = ""
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(GeneratedTP).where(GeneratedTP.id == tp_id))
         tp = result.scalar_one_or_none()
+        if tp and tp.topic_id:
+            t_res = await db.execute(select(Topic).where(Topic.id == tp.topic_id))
+            t = t_res.scalar_one_or_none()
+            if t:
+                topic_title_cached = t.title
 
     if not tp:
         await websocket.send_text(json.dumps({"type": "error", "content": "TP introuvable"}))
@@ -103,7 +110,7 @@ async def chat_endpoint(
                 "tp_id": str(tp_id),
                 "session_id": f"{student_id}:{tp.teacher_id}:{tp_id}",
                 "topic_id": str(tp.topic_id),
-                "topic_title": None,
+                "topic_title": topic_title_cached,
                 "topic_description": None,
                 "student_level": profile.niveau if profile else 1,
                 "student_weak_points": list(profile.points_faibles or []) if profile else [],
@@ -130,6 +137,7 @@ async def chat_endpoint(
             }
 
             # Stream response via the explainer agent directly for low latency
+            from ai_engine.agents.tutor import _detect_language
             from ai_engine.llm_factory import get_llm
             from ai_engine.prompts.explainer_prompts import SYSTEM_EXPLAINER
             from rag_pipeline.retriever import RAGRetriever
@@ -148,6 +156,9 @@ async def chat_endpoint(
                 student_level=profile.niveau if profile else 1,
                 question=question,
                 rag_context=rag_context,
+                topic_title=topic_title_cached or "Non spécifié",
+                tp_enonce=tp.enonce or "Énoncé non disponible",
+                tp_langage=_detect_language(state),
             )
 
             llm = get_llm()
