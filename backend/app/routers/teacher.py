@@ -318,7 +318,14 @@ async def generate_student_report(
     teacher: User = Depends(get_current_teacher),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Generate a fresh AI report for a student via the Analyst agent."""
+    """Generate a fresh AI report for a student via direct LLM call."""
+    from datetime import timezone, timedelta
+
+    from fastapi import HTTPException
+    from langchain_core.messages import HumanMessage
+
+    from ai_engine.llm_factory import get_llm
+
     enroll = await db.execute(
         select(StudentEnrollment).where(
             StudentEnrollment.student_id == student_id,
@@ -326,37 +333,79 @@ async def generate_student_report(
         )
     )
     if not enroll.scalar_one_or_none():
-        raise ForbiddenException("Cet étudiant n'est pas inscrit chez vous")
+        raise NotFoundException("Étudiant non trouvé")
 
-    from ai_engine.agents.analyst import AnalystAgent
+    student_result = await db.get(User, student_id)
+    if not student_result:
+        raise NotFoundException("Étudiant introuvable")
 
-    agent = AnalystAgent()
-    await agent.generate_report(
-        student_id=str(student_id),
-        teacher_id=str(teacher.id),
-        db=db,
+    profile_result = await db.execute(
+        select(StudentProfile).where(StudentProfile.student_id == student_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+
+    subs_result = await db.execute(
+        select(Submission)
+        .where(Submission.student_id == student_id)
+        .order_by(Submission.created_at.desc())
+        .limit(20)
+    )
+    submissions = subs_result.scalars().all()
+
+    niveau = profile.niveau if profile else 1
+    points_faibles = profile.points_faibles if profile else []
+    concepts = profile.concepts_maitrises if profile else []
+
+    sub_summary = "\n".join([
+        f"- {s.created_at.date()} : score {s.score}/100"
+        for s in submissions
+    ]) or "Aucune soumission encore"
+
+    prompt = (
+        f"Tu es un assistant pédagogique expert.\n"
+        f"Génère un bilan pédagogique détaillé en français "
+        f"pour l'étudiant {student_result.first_name} {student_result.last_name}.\n\n"
+        f"Niveau actuel : {niveau}/5\n"
+        f"Points faibles : {', '.join(points_faibles) or 'Non détectés'}\n"
+        f"Concepts maîtrisés : {', '.join(concepts) or 'Aucun encore'}\n"
+        f"Nombre de soumissions : {len(submissions)}\n\n"
+        f"Historique récent :\n{sub_summary}\n\n"
+        f"Rédige un rapport structuré avec :\n"
+        f"1. Résumé de la progression générale\n"
+        f"2. Points forts observés\n"
+        f"3. Difficultés récurrentes avec exemples concrets\n"
+        f"4. Recommandations pédagogiques précises\n"
+        f"5. Objectifs suggérés pour la prochaine période\n\n"
+        f"Sois précis, bienveillant et constructif.\n"
+        f"Maximum 500 mots. Réponds uniquement en français."
     )
 
-    # Return the freshly generated report
-    result = await db.execute(
-        select(Report)
-        .where(
-            Report.student_id == student_id,
-            Report.teacher_id == teacher.id,
-        )
-        .order_by(Report.created_at.desc())
-        .limit(1)
+    try:
+        llm = get_llm()
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        content = response.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur LLM : {str(e)}")
+
+    now = datetime.now(timezone.utc)
+    report = Report(
+        student_id=student_id,
+        teacher_id=teacher.id,
+        period_start=now - timedelta(days=7),
+        period_end=now,
+        content=content,
+        metrics_json={
+            "submissions_count": len(submissions),
+            "niveau": niveau,
+        },
     )
-    report: Report | None = result.scalar_one_or_none()
-    if not report:
-        raise NotFoundException("Rapport introuvable après génération")
+    db.add(report)
+    await db.commit()
+    await db.refresh(report)
 
     return {
         "id": str(report.id),
-        "period_start": report.period_start.isoformat(),
-        "period_end": report.period_end.isoformat(),
-        "content": report.content,
-        "metrics": report.metrics_json,
+        "content": content,
         "created_at": report.created_at.isoformat(),
     }
 

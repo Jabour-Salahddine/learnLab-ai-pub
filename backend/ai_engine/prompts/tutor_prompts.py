@@ -27,6 +27,13 @@ INSTRUCTIONS :
    - Hint 3 : partiel (pseudo-code uniquement)
 7. JAMAIS donner la solution complète
 
+RÈGLES POUR LES TESTS UNITAIRES :
+- expected_output doit être LE MOT CLÉ ou LA VALEUR PRINCIPALE attendue, pas une phrase
+- Exemple correct : expected_output: "Wouf"
+- Exemple incorrect : expected_output: "Le chien doit aboyer Wouf"
+- Si la sortie est un nombre, mets juste le nombre : "42" et non "La réponse est 42"
+- Génère des tests qui évaluent le comportement fonctionnel, pas le format exact de phrase
+
 Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
 {{
   "enonce": "...",

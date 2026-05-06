@@ -84,6 +84,18 @@ class TPDetailResponse(BaseModel):
     created_at: datetime
 
 
+class RunCodeRequest(BaseModel):
+    code: str = Field(min_length=1)
+    language: str = "python"
+
+
+class RunCodeResponse(BaseModel):
+    stdout: str
+    stderr: str
+    exit_code: int
+    runtime_available: bool
+
+
 class SubmissionHistoryItem(BaseModel):
     id: uuid.UUID
     tp_id: uuid.UUID | None
@@ -92,3 +104,4 @@ class SubmissionHistoryItem(BaseModel):
     created_at: datetime
     tests_passed: int
     tests_total: int
+    submission_type: str = "submission"

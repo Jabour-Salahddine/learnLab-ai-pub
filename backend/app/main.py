@@ -134,6 +134,37 @@ async def _generate_weekly_reports() -> None:
 # ── Startup / shutdown ─────────────────────────────────────────────────────────
 
 
+async def _ensure_python_runtime() -> None:
+    """Check Piston for Python runtime; install it automatically if absent."""
+    import httpx
+
+    piston_url = settings.piston_url
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{piston_url}/api/v2/runtimes", timeout=10.0)
+            installed = [r["language"].lower() for r in resp.json()]
+            if "python" not in installed:
+                logger.info("piston_python_not_found_installing")
+                install_resp = await client.post(
+                    f"{piston_url}/api/v2/packages",
+                    json={"language": "python", "version": "3.10.0"},
+                    timeout=180.0,
+                )
+                if install_resp.status_code == 200:
+                    logger.info("piston_python_installed_success")
+                else:
+                    logger.warning(
+                        "piston_python_install_failed",
+                        status=install_resp.status_code,
+                    )
+            else:
+                logger.info("piston_python_already_installed")
+    except httpx.ConnectError:
+        logger.warning("piston_unreachable_at_startup", url=piston_url)
+    except Exception as e:
+        logger.warning("piston_check_failed", error=str(e))
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     logger.info("learnlab_api_starting", environment=settings.environment)
@@ -146,6 +177,9 @@ async def on_startup() -> None:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("database_tables_ready")
     # ─────────────────────────────────────────────────────────
+
+    # Vérifie et installe Python dans Piston
+    await _ensure_python_runtime()
 
     # Initialise LangGraph
     from ai_engine.graph import create_graph

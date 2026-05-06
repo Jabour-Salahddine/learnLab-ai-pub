@@ -22,6 +22,8 @@ from app.schemas.student import (
     ErrorItem,
     GenerateTPResponse,
     HintResponse,
+    RunCodeRequest,
+    RunCodeResponse,
     StudentProfileResponse,
     SubmissionHistoryItem,
     SubmitCodeRequest,
@@ -281,6 +283,71 @@ async def generate_tp(
     )
 
 
+# ── POST /student/tp/{tp_id}/run ──────────────────────────────────────────────
+
+
+@router.post("/tp/{tp_id}/run", response_model=RunCodeResponse)
+async def run_code(
+    tp_id: uuid.UUID,
+    body: RunCodeRequest,
+    student: User = Depends(get_current_student),
+    db: AsyncSession = Depends(get_db),
+) -> RunCodeResponse:
+    """Execute code without full evaluation. Saved as type='execution' for traceability."""
+    language = body.language.lower()
+
+    # Check runtime availability
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.piston_url}/api/v2/runtimes")
+            runtimes = resp.json()
+            available_langs = [r["language"].lower() for r in runtimes]
+            if language not in available_langs:
+                return RunCodeResponse(
+                    stdout="",
+                    stderr=f"⚠️ Runtime '{language}' non disponible. Contactez votre enseignant.",
+                    exit_code=-1,
+                    runtime_available=False,
+                )
+    except Exception:
+        return RunCodeResponse(
+            stdout="",
+            stderr="⚠️ Service d'exécution inaccessible.",
+            exit_code=-1,
+            runtime_available=False,
+        )
+
+    # Execute via Piston
+    exec_result = await _run_piston(body.code, language)
+
+    # Get teacher_id from enrollment
+    teacher_id = await _get_teacher_id(student.id, db)
+    effective_teacher_id = teacher_id if teacher_id else student.id
+
+    # Save with type="execution" for traceability
+    submission = Submission(
+        student_id=student.id,
+        tp_id=tp_id,
+        teacher_id=effective_teacher_id,
+        code=body.code,
+        stdout=exec_result["stdout"],
+        stderr=exec_result["stderr"],
+        exit_code=exec_result["exit_code"],
+        score=None,
+        errors_json={},
+        submission_type="execution",
+    )
+    db.add(submission)
+    await db.commit()
+
+    return RunCodeResponse(
+        stdout=exec_result["stdout"],
+        stderr=exec_result["stderr"],
+        exit_code=exec_result["exit_code"],
+        runtime_available=True,
+    )
+
+
 # ── POST /student/tp/{tp_id}/submit ───────────────────────────────────────────
 
 
@@ -363,6 +430,7 @@ async def submit_code(
             "tests_results": tests_results,
             "feedback": feedback,
         },
+        submission_type="submission",
     )
     db.add(submission)
     await db.commit()
@@ -582,7 +650,10 @@ async def get_my_submissions(
     """Return all submissions for the authenticated student, sorted by date desc."""
     result = await db.execute(
         select(Submission)
-        .where(Submission.student_id == student.id)
+        .where(
+            Submission.student_id == student.id,
+            Submission.submission_type == "submission",
+        )
         .order_by(Submission.created_at.desc())
     )
     submissions = result.scalars().all()
@@ -615,6 +686,7 @@ async def get_my_submissions(
                 created_at=sub.created_at,
                 tests_passed=tests_passed,
                 tests_total=tests_total,
+                submission_type=sub.submission_type,
             )
         )
 

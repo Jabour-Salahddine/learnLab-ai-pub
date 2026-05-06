@@ -62,6 +62,17 @@ class EvaluatorAgent:
         }
 
     @staticmethod
+    def _compare_output_flexible(actual: str, expected: str) -> bool:
+        """Intelligent comparison: if expected is short (≤30 chars), check containment."""
+        actual_clean = actual.strip().lower()
+        expected_clean = expected.strip().lower()
+        if actual_clean == expected_clean:
+            return True
+        if len(expected_clean) <= 30:
+            return expected_clean in actual_clean
+        return False
+
+    @staticmethod
     def _detect_error_type(stderr: str, exit_code: int | None) -> str:
         stderr = stderr or ""
         if "SyntaxError" in stderr or "IndentationError" in stderr:

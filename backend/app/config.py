@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     # MinIO
     minio_endpoint: str = "minio:9000"
+    minio_public_url: str = "http://localhost:9000"
     minio_access_key: str = "learnlab_minio"
     minio_secret_key: str = "learnlab_minio_secret"
     minio_bucket: str = "rag-documents"

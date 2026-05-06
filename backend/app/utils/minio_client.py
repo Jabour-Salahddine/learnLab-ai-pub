@@ -14,11 +14,32 @@ logger = structlog.get_logger(__name__)
 
 
 def _client() -> Minio:
+    """Internal client for server-side operations (upload, delete)."""
     return Minio(
         settings.minio_endpoint,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=False,
+    )
+
+
+def _public_client() -> Minio:
+    """Client for presigned URL generation — uses the browser-accessible endpoint.
+
+    region="us-east-1" bypasses the GET /bucket?location= network call so the
+    SDK can generate a signed URL without connecting to localhost:9000 from
+    inside the container. The signature is computed with localhost:9000 as the
+    host, so it is valid when the browser sends the request to localhost:9000.
+    """
+    public_url = settings.minio_public_url
+    secure = public_url.startswith("https")
+    endpoint = public_url.replace("https://", "").replace("http://", "")
+    return Minio(
+        endpoint,
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        secure=secure,
+        region="us-east-1",
     )
 
 
@@ -48,7 +69,7 @@ def _delete_sync(object_name: str) -> None:
 
 
 async def upload_file(object_name: str, data: bytes, content_type: str) -> None:
-    """Upload *data* to MinIO.  Falls back silently if MinIO is unavailable."""
+    """Upload *data* to MinIO. Falls back silently if MinIO is unavailable."""
     try:
         await asyncio.to_thread(_upload_sync, object_name, data, content_type)
         logger.info("minio_upload_ok", object=object_name)
@@ -57,7 +78,7 @@ async def upload_file(object_name: str, data: bytes, content_type: str) -> None:
 
 
 async def delete_file(object_name: str) -> None:
-    """Delete an object from MinIO.  Silently ignores missing objects."""
+    """Delete an object from MinIO. Silently ignores missing objects."""
     try:
         await asyncio.to_thread(_delete_sync, object_name)
     except S3Error as exc:
@@ -68,7 +89,8 @@ async def delete_file(object_name: str) -> None:
 
 
 def _presigned_url_sync(object_name: str, expires_seconds: int = 3600) -> str:
-    c = _client()
+    """Generate a presigned URL signed with the public endpoint (browser-accessible)."""
+    c = _public_client()
     return c.presigned_get_object(
         settings.minio_bucket,
         object_name,
@@ -77,7 +99,7 @@ def _presigned_url_sync(object_name: str, expires_seconds: int = 3600) -> str:
 
 
 async def get_presigned_url(object_name: str, expires_seconds: int = 3600) -> str:
-    """Generate a presigned GET URL for a MinIO object (1h default TTL)."""
+    """Generate a presigned GET URL signed for browser access (public endpoint)."""
     try:
         return await asyncio.to_thread(_presigned_url_sync, object_name, expires_seconds)
     except Exception as exc:

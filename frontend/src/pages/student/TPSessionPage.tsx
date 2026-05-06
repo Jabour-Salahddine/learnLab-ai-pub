@@ -4,7 +4,7 @@ import { ArrowLeft, Play, Clock, Send, Lightbulb, ChevronDown, ChevronUp, Lock, 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTPDetail, useSubmitTP, useHint } from "@/hooks/useTP";
+import { useTPDetail, useSubmitTP, useRunCode, useHint } from "@/hooks/useTP";
 import { useChat } from "@/hooks/useChat";
 import { useNotifications } from "@/context/NotificationContext";
 import { toast } from "sonner";
@@ -34,6 +34,7 @@ const TPSessionPage = () => {
 
   const { data: tpDetail, isLoading: tpLoading } = useTPDetail(tpId ?? null);
   const { submit, isSubmitting } = useSubmitTP();
+  const { runCode, isRunning: isRunningCode } = useRunCode();
   const { requestHint, hint, hintLevel } = useHint(tpId ?? null);
   const { messages, sendMessage, isConnected, isTyping } = useChat(tpId ?? null);
 
@@ -42,7 +43,6 @@ const TPSessionPage = () => {
   const [langOpen, setLangOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalContent, setTerminalContent] = useState<{ stdout: string; stderr: string; exit_code: number } | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
   const [hintsOpen, setHintsOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [activeAgent, setActiveAgent] = useState<"tuteur" | "explicateur">("tuteur");
@@ -72,27 +72,23 @@ const TPSessionPage = () => {
     return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   };
 
-  const runCode = async () => {
+  const handleRunCode = async () => {
     if (!tpId || !code.trim()) return;
-    setIsRunning(true);
     setTerminalOpen(true);
     setTerminalContent(null);
     try {
-      const result = await submit({ tpId, code });
+      const result = await runCode({ tpId, code, language });
       setTerminalContent({
-        stdout: result.tests_results.map((t) => `${t.passed ? "✓" : "✗"} ${t.description}${t.actual ? ` → ${t.actual}` : ""}`).join("\n"),
-        stderr: result.errors_categorized.map((e) => `[${e.type}] ${e.description}`).join("\n"),
-        exit_code: result.score >= 50 ? 0 : 1,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code,
       });
-      addNotification({
-        title: "Code exécuté",
-        message: `Score : ${result.score}%`,
-        icon: "⚡",
-      });
+      if (!result.runtime_available) {
+        toast.error(result.stderr);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erreur d'exécution");
-    } finally {
-      setIsRunning(false);
+      setTerminalContent({ stdout: "", stderr: String(err), exit_code: -1 });
     }
   };
 
@@ -276,10 +272,10 @@ const TPSessionPage = () => {
               size="sm"
               variant="outline"
               className="h-7 text-xs"
-              onClick={runCode}
-              disabled={isRunning || isSubmitting}
+              onClick={handleRunCode}
+              disabled={isRunningCode || isSubmitting}
             >
-              {isRunning ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Play className="w-3 h-3 mr-1" />}
+              {isRunningCode ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Play className="w-3 h-3 mr-1" />}
               Exécuter
             </Button>
           </div>
@@ -316,13 +312,19 @@ const TPSessionPage = () => {
               {terminalOpen ? <ChevronDown className="w-3 h-3 ml-1" /> : <ChevronUp className="w-3 h-3 ml-1" />}
             </button>
             {terminalOpen && (
-              <div className="p-3 font-mono text-xs overflow-y-auto h-32">
-                {isRunning ? (
+              <div className={`p-3 font-mono text-xs overflow-y-auto h-32 rounded-b border-t-2 ${
+                terminalContent
+                  ? terminalContent.exit_code === 0
+                    ? "border-success/50"
+                    : "border-destructive/50"
+                  : "border-border"
+              }`}>
+                {isRunningCode ? (
                   <span className="text-muted-foreground animate-pulse">Exécution en cours...</span>
                 ) : terminalContent ? (
                   <div className="space-y-1">
                     {terminalContent.stdout && (
-                      <pre className="text-foreground whitespace-pre-wrap">{terminalContent.stdout}</pre>
+                      <pre className="text-success whitespace-pre-wrap">{terminalContent.stdout}</pre>
                     )}
                     {terminalContent.stderr && (
                       <pre className="text-destructive whitespace-pre-wrap">{terminalContent.stderr}</pre>

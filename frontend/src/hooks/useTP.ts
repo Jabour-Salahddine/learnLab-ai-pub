@@ -8,6 +8,13 @@ import type {
   HintResponse,
 } from "@/types/api";
 
+export interface RunCodeResponse {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  runtime_available: boolean;
+}
+
 export function useGenerateTP() {
   const [tp, setTP] = useState<GeneratedTPResponse | null>(null);
 
@@ -47,6 +54,19 @@ export function useSubmitTP() {
     submit: mutation.mutateAsync,
     result,
     isSubmitting: mutation.isPending,
+    error: mutation.error,
+  };
+}
+
+export function useRunCode() {
+  const mutation = useMutation({
+    mutationFn: ({ tpId, code, language }: { tpId: string; code: string; language: string }) =>
+      api.post<RunCodeResponse>(`/student/tp/${tpId}/run`, { code, language }),
+  });
+
+  return {
+    runCode: mutation.mutateAsync,
+    isRunning: mutation.isPending,
     error: mutation.error,
   };
 }
