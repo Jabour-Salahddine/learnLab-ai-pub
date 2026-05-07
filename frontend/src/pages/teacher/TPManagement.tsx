@@ -58,6 +58,66 @@ function topicToForm(t: TopicResponse): TopicFormState {
   };
 }
 
+const TopicForm = ({
+  form,
+  setForm,
+  onSubmit,
+  isPending,
+  submitLabel,
+}: {
+  form: TopicFormState;
+  setForm: (f: TopicFormState) => void;
+  onSubmit: () => void;
+  isPending: boolean;
+  submitLabel: string;
+}) => (
+  <div className="space-y-4 mt-4">
+    <Input
+      placeholder="Titre *"
+      className="bg-muted/50"
+      value={form.title}
+      onChange={(e) => setForm({ ...form, title: e.target.value })}
+    />
+    <select
+      className="w-full h-10 rounded-lg bg-muted/50 border border-border px-3 text-sm text-foreground"
+      value={form.domaine}
+      onChange={(e) => setForm({ ...form, domaine: e.target.value })}
+    >
+      <option value="">Domaine</option>
+      {DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
+    </select>
+    <div>
+      <label className="text-sm text-muted-foreground">Niveau minimum : {form.niveauMin}/5</label>
+      <input
+        type="range"
+        min={1}
+        max={5}
+        value={form.niveauMin}
+        onChange={(e) => setForm({ ...form, niveauMin: Number(e.target.value) })}
+        className="w-full accent-primary"
+      />
+      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+        <span>Débutant</span><span>Expert+</span>
+      </div>
+    </div>
+    <textarea
+      placeholder="Description (optionnel)"
+      rows={3}
+      value={form.description}
+      onChange={(e) => setForm({ ...form, description: e.target.value })}
+      className="w-full rounded-lg bg-muted/50 border border-border px-3 py-2 text-sm text-foreground resize-none"
+    />
+    <Button
+      className="w-full gradient-primary text-primary-foreground"
+      onClick={onSubmit}
+      disabled={isPending}
+    >
+      {isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+      {submitLabel}
+    </Button>
+  </div>
+);
+
 const TPManagement = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<TopicFormState>(emptyForm());
@@ -127,65 +187,7 @@ const TPManagement = () => {
     }
   };
 
-  const TopicForm = ({
-    form,
-    setForm,
-    onSubmit,
-    isPending,
-    submitLabel,
-  }: {
-    form: TopicFormState;
-    setForm: (f: TopicFormState) => void;
-    onSubmit: () => void;
-    isPending: boolean;
-    submitLabel: string;
-  }) => (
-    <div className="space-y-4 mt-4">
-      <Input
-        placeholder="Titre *"
-        className="bg-muted/50"
-        value={form.title}
-        onChange={(e) => setForm({ ...form, title: e.target.value })}
-      />
-      <select
-        className="w-full h-10 rounded-lg bg-muted/50 border border-border px-3 text-sm text-foreground"
-        value={form.domaine}
-        onChange={(e) => setForm({ ...form, domaine: e.target.value })}
-      >
-        <option value="">Domaine</option>
-        {DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
-      </select>
-      <div>
-        <label className="text-sm text-muted-foreground">Niveau minimum : {form.niveauMin}/5</label>
-        <input
-          type="range"
-          min={1}
-          max={5}
-          value={form.niveauMin}
-          onChange={(e) => setForm({ ...form, niveauMin: Number(e.target.value) })}
-          className="w-full accent-primary"
-        />
-        <div className="flex justify-between text-xs text-muted-foreground mt-1">
-          <span>Débutant</span><span>Expert+</span>
-        </div>
-      </div>
-      <textarea
-        placeholder="Description (optionnel)"
-        rows={3}
-        value={form.description}
-        onChange={(e) => setForm({ ...form, description: e.target.value })}
-        className="w-full rounded-lg bg-muted/50 border border-border px-3 py-2 text-sm text-foreground resize-none"
-      />
-      <Button
-        className="w-full gradient-primary text-primary-foreground"
-        onClick={onSubmit}
-        disabled={isPending}
-      >
-        {isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
-        {submitLabel}
-      </Button>
-    </div>
-  );
+
 
   return (
     <AppLayout>
