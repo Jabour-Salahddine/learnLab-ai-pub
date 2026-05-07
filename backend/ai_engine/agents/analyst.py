@@ -107,16 +107,56 @@ class AnalystAgent:
         )
         final_submissions = final_result.scalars().all()
 
-        # Execution attempts (engagement indicator — not failures)
-        exec_count_result = await db.execute(
-            select(func.count(Submission.id))
+        # Execution attempts — fetch detail for enriched context
+        exec_detail_result = await db.execute(
+            select(Submission)
             .where(
                 Submission.student_id == s_id,
                 Submission.teacher_id == t_id,
                 Submission.submission_type == "execution",
             )
+            .order_by(Submission.created_at.asc())
+            .limit(10)
         )
-        exec_count = exec_count_result.scalar() or 0
+        exec_submissions = exec_detail_result.scalars().all()
+        exec_count = len(exec_submissions)
+
+        ctx_labels = {
+            "skeleton": "Squelette vide testé",
+            "syntax_error": "Erreur de syntaxe",
+            "logic_error": "Erreur logique",
+            "runtime_error": "Erreur d'exécution",
+            "correct": "Code correct",
+            "unknown": "Tentative de code",
+        }
+
+        def build_exec_context(execs: list) -> str:
+            if not execs:
+                return "Aucune tentative d'exécution."
+            lines = []
+            for i, e in enumerate(execs, 1):
+                errors = e.errors_json or {}
+                exec_ctx = errors.get("execution_context", "unknown")
+                errors_cat = errors.get("errors_categorized", [])
+                feedback = errors.get("feedback_general", "")
+                code_preview = (
+                    e.code[:200].replace("\n", " | ") if e.code else "vide"
+                )
+                label = ctx_labels.get(exec_ctx, "Tentative de code")
+                error_descs = [
+                    f"{err.get('type')}: {err.get('description')}"
+                    for err in errors_cat
+                ]
+                lines.append(
+                    f"Tentative {i} ({e.created_at.strftime('%d/%m %H:%M')}) "
+                    f"— {label}\n"
+                    f"  Code : {code_preview}\n"
+                    f"  Erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                    f"  Analyse : {feedback[:150]}\n"
+                )
+            return "\n".join(lines)
+
+        exec_context = build_exec_context(exec_submissions)
 
         scores = [s.score for s in final_submissions if s.score is not None]
         avg_score = round(sum(scores) / len(scores), 1) if scores else None
@@ -213,6 +253,9 @@ Erreurs récurrentes : {error_types}
 ━━ SOUMISSIONS FINALES DÉTAILLÉES ━━
 {sub_context}
 
+━━ TENTATIVES D'EXÉCUTION DÉTAILLÉES ({exec_count} tentatives) ━━
+{exec_context}
+
 ━━ INSTRUCTIONS D'ANALYSE ━━
 
 Analyse le CODE SOUMIS et les ERREURS RÉELLES.
@@ -225,6 +268,27 @@ comme une difficulté ou un point faible.
 Ce sont des différences cosmétiques sans importance
 pédagogique. Concentre-toi sur la LOGIQUE du code,
 la STRUCTURE, et la compréhension des CONCEPTS.
+
+ANALYSE DU PROCESSUS D'APPRENTISSAGE :
+Les tentatives d'exécution montrent comment
+l'étudiant a progressé AVANT la soumission finale.
+Analyse ces tentatives pour identifier :
+- Les erreurs commises en cours de développement
+- La progression entre les tentatives
+- Les concepts qui ont posé problème initialement
+- Si l'étudiant a su corriger ses erreurs seul
+
+Si des tentatives intéressantes existent
+(erreurs spécifiques, progression visible),
+mentionne-les concrètement dans le rapport.
+Exemple : "Lors de ses premières tentatives,
+l'étudiant a rencontré des erreurs de syntaxe
+qu'il a su corriger progressivement."
+
+NE MENTIONNE PAS les tentatives avec
+execution_context="skeleton" comme des
+difficultés — c'est un comportement normal
+de tester le code initial.
 
 Génère un rapport structuré :
 

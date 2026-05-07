@@ -357,19 +357,59 @@ async def generate_student_report(
     )
     final_submissions = final_subs_result.scalars().all()
 
-    # Execution attempts count (positive engagement indicator — NOT failures)
-    exec_count_result = await db.execute(
-        select(func.count(Submission.id))
+    # Execution attempts — fetch detail for enriched context
+    exec_detail_result = await db.execute(
+        select(Submission)
         .where(
             Submission.student_id == student_id,
             Submission.submission_type == "execution",
         )
+        .order_by(Submission.created_at.asc())
+        .limit(10)
     )
-    exec_count = exec_count_result.scalar() or 0
+    exec_submissions = exec_detail_result.scalars().all()
+    exec_count = len(exec_submissions)
 
     niveau = profile.niveau if profile else 1
     points_faibles = profile.points_faibles if profile else []
     concepts = profile.concepts_maitrises if profile else []
+
+    _exec_ctx_labels = {
+        "skeleton": "Squelette vide testé",
+        "syntax_error": "Erreur de syntaxe",
+        "logic_error": "Erreur logique",
+        "runtime_error": "Erreur d'exécution",
+        "correct": "Code correct",
+        "unknown": "Tentative de code",
+    }
+
+    def build_exec_context(execs: list) -> str:
+        if not execs:
+            return "Aucune tentative d'exécution."
+        lines = []
+        for i, e in enumerate(execs, 1):
+            errors = e.errors_json or {}
+            exec_ctx = errors.get("execution_context", "unknown")
+            errors_cat = errors.get("errors_categorized", [])
+            feedback = errors.get("feedback_general", "")
+            code_preview = (
+                e.code[:200].replace("\n", " | ") if e.code else "vide"
+            )
+            label = _exec_ctx_labels.get(exec_ctx, "Tentative de code")
+            error_descs = [
+                f"{err.get('type')}: {err.get('description')}"
+                for err in errors_cat
+            ]
+            lines.append(
+                f"Tentative {i} ({e.created_at.strftime('%d/%m %H:%M')}) "
+                f"— {label}\n"
+                f"  Code : {code_preview}\n"
+                f"  Erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                f"  Analyse : {feedback[:150]}\n"
+            )
+        return "\n".join(lines)
+
+    exec_context = build_exec_context(exec_submissions)
 
     def build_submission_context(submissions: list) -> str:
         if not submissions:
@@ -434,8 +474,13 @@ async def generate_student_report(
         f"Concepts maîtrisés : {concepts_str}\n"
         f"Tentatives d'exécution (engagement) : {exec_count}\n\n"
         f"SOUMISSIONS FINALES DÉTAILLÉES :\n{sub_context}\n\n"
+        f"TENTATIVES D'EXÉCUTION DÉTAILLÉES ({exec_count} tentatives) :\n{exec_context}\n\n"
         f"INSTRUCTIONS D'ANALYSE :\n\n"
         f"Analyse le CODE SOUMIS et les ERREURS RÉELLES pour produire un rapport concret.\n\n"
+        f"ANALYSE DU PROCESSUS D'APPRENTISSAGE :\n"
+        f"Les tentatives d'exécution montrent la progression AVANT la soumission finale.\n"
+        f"Si des tentatives intéressantes existent (erreurs spécifiques, progression visible),\n"
+        f"mentionne-les concrètement. NE mentionne PAS les tentatives 'skeleton' comme des difficultés.\n\n"
         f"1. RÉSUMÉ DE PROGRESSION :\n"
         f"   Basé sur les scores réels. Mentionne positivement les {exec_count} "
         f"tentatives d'exécution comme preuve d'engagement.\n\n"
@@ -634,20 +679,60 @@ async def ask_about_student(
     )
     final_submissions = final_subs_result.scalars().all()
 
-    # Execution attempts count (positive engagement indicator)
-    exec_count_result = await db.execute(
-        select(func.count(Submission.id))
+    # Execution attempts — fetch detail for enriched context
+    exec_ask_result = await db.execute(
+        select(Submission)
         .where(
             Submission.student_id == student_id,
             Submission.teacher_id == teacher.id,
             Submission.submission_type == "execution",
         )
+        .order_by(Submission.created_at.asc())
+        .limit(10)
     )
-    exec_count = exec_count_result.scalar() or 0
+    exec_ask_submissions = exec_ask_result.scalars().all()
+    exec_count = len(exec_ask_submissions)
 
     scores = [s.score for s in final_submissions if s.score is not None]
     score_moyen = round(sum(scores) / len(scores), 1) if scores else None
     niveau = profile.niveau if profile else 1
+
+    _ask_ctx_labels = {
+        "skeleton": "Squelette vide testé",
+        "syntax_error": "Erreur de syntaxe",
+        "logic_error": "Erreur logique",
+        "runtime_error": "Erreur d'exécution",
+        "correct": "Code correct",
+        "unknown": "Tentative de code",
+    }
+
+    def build_ask_exec_context(execs: list) -> str:
+        if not execs:
+            return "Aucune tentative d'exécution."
+        lines = []
+        for i, e in enumerate(execs, 1):
+            errors = e.errors_json or {}
+            exec_ctx = errors.get("execution_context", "unknown")
+            errors_cat = errors.get("errors_categorized", [])
+            feedback = errors.get("feedback_general", "")
+            code_preview = (
+                e.code[:200].replace("\n", " | ") if e.code else "vide"
+            )
+            label = _ask_ctx_labels.get(exec_ctx, "Tentative de code")
+            error_descs = [
+                f"{err.get('type')}: {err.get('description')}"
+                for err in errors_cat
+            ]
+            lines.append(
+                f"Tentative {i} ({e.created_at.strftime('%d/%m %H:%M')}) "
+                f"— {label}\n"
+                f"  Code : {code_preview}\n"
+                f"  Erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                f"  Analyse : {feedback[:150]}\n"
+            )
+        return "\n".join(lines)
+
+    ask_exec_context = build_ask_exec_context(exec_ask_submissions)
 
     def build_submission_context(submissions: list) -> str:
         if not submissions:
@@ -687,9 +772,10 @@ async def ask_about_student(
         f"Score moyen : {score_moyen_str}\n"
         f"Tentatives d'exécution : {exec_count} (engagement positif)\n\n"
         f"Soumissions finales analysées :\n{sub_context}\n\n"
+        f"Tentatives d'exécution détaillées ({exec_count}) :\n{ask_exec_context}\n\n"
         f"Question de l'enseignant : {body.question}\n\n"
         f"Réponds de façon PRÉCISE et UTILE.\n"
-        f"Appuie-toi sur les données réelles du code et des erreurs pour répondre.\n"
+        f"Appuie-toi sur les données réelles du code, des erreurs ET des tentatives d'exécution pour répondre.\n"
         f"Maximum 200 mots en français."
     )
 

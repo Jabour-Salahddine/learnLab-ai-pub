@@ -339,6 +339,55 @@ async def run_code(
     )
     db.add(submission)
     await db.commit()
+    await db.refresh(submission)
+
+    # Qualitative analysis via Evaluator (no score, no unit tests)
+    try:
+        import json
+        import re
+
+        from ai_engine.llm_factory import get_llm
+        from ai_engine.prompts.evaluator_prompts import SYSTEM_EVALUATOR_EXECUTION
+        from langchain_core.messages import HumanMessage
+
+        tp_result = await db.execute(
+            select(GeneratedTPModel).where(GeneratedTPModel.id == tp_id)
+        )
+        tp_obj = tp_result.scalar_one_or_none()
+        enonce = tp_obj.enonce if tp_obj else "Non disponible"
+
+        profile_result = await db.execute(
+            select(StudentProfile).where(StudentProfile.student_id == student.id)
+        )
+        profile = profile_result.scalar_one_or_none()
+        student_level = profile.niveau if profile else 1
+
+        eval_prompt = SYSTEM_EVALUATOR_EXECUTION.format(
+            enonce=enonce[:800],
+            langage=body.language.lower(),
+            student_level=student_level,
+            code=body.code[:1500],
+            stdout=exec_result["stdout"][:500],
+            stderr=exec_result["stderr"][:500],
+            exit_code=exec_result["exit_code"],
+        )
+
+        llm = get_llm()
+        eval_response = await llm.ainvoke([HumanMessage(content=eval_prompt)])
+        eval_content = (
+            eval_response.content
+            if hasattr(eval_response, "content")
+            else str(eval_response)
+        )
+
+        clean = re.sub(r"```json\s*|\s*```", "", eval_content).strip()
+        eval_data = json.loads(clean)
+
+        submission.errors_json = eval_data
+        await db.commit()
+
+    except Exception as e:
+        logger.warning("execution_evaluator_failed", error=str(e))
 
     return RunCodeResponse(
         stdout=exec_result["stdout"],
