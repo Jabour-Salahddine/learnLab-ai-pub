@@ -19,6 +19,7 @@ from app.models.report import Report
 from app.models.student_profile import StudentProfile
 from app.models.submission import Submission
 from app.models.topic import Topic
+from app.models.tp import GeneratedTP
 from app.models.user import User
 from app.schemas.teacher import (
     AnalyticsResponse,
@@ -26,10 +27,12 @@ from app.schemas.teacher import (
     AskStudentResponse,
     CreateInvitationCodeRequest,
     CreateTopicRequest,
+    GeneratedTPItem,
     InvitationCodeResponse,
     StudentAtRisk,
     StudentSummary,
     SubmissionSummary,
+    TeacherSubmissionItem,
     TopErrorItem,
     TopicResponse,
     UpdateTopicRequest,
@@ -319,8 +322,6 @@ async def generate_student_report(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Generate a fresh AI report for a student via direct LLM call."""
-    from datetime import timezone, timedelta
-
     from fastapi import HTTPException
     from langchain_core.messages import HumanMessage
 
@@ -335,8 +336,8 @@ async def generate_student_report(
     if not enroll.scalar_one_or_none():
         raise NotFoundException("Étudiant non trouvé")
 
-    student_result = await db.get(User, student_id)
-    if not student_result:
+    student = await db.get(User, student_id)
+    if not student:
         raise NotFoundException("Étudiant introuvable")
 
     profile_result = await db.execute(
@@ -344,40 +345,114 @@ async def generate_student_report(
     )
     profile = profile_result.scalar_one_or_none()
 
-    subs_result = await db.execute(
+    # Final submissions only (official evaluations with score)
+    final_subs_result = await db.execute(
         select(Submission)
-        .where(Submission.student_id == student_id)
+        .where(
+            Submission.student_id == student_id,
+            Submission.submission_type == "submission",
+        )
         .order_by(Submission.created_at.desc())
-        .limit(20)
+        .limit(15)
     )
-    submissions = subs_result.scalars().all()
+    final_submissions = final_subs_result.scalars().all()
+
+    # Execution attempts count (positive engagement indicator — NOT failures)
+    exec_count_result = await db.execute(
+        select(func.count(Submission.id))
+        .where(
+            Submission.student_id == student_id,
+            Submission.submission_type == "execution",
+        )
+    )
+    exec_count = exec_count_result.scalar() or 0
 
     niveau = profile.niveau if profile else 1
     points_faibles = profile.points_faibles if profile else []
     concepts = profile.concepts_maitrises if profile else []
 
-    sub_summary = "\n".join([
-        f"- {s.created_at.date()} : score {s.score}/100"
-        for s in submissions
-    ]) or "Aucune soumission encore"
+    def build_submission_context(submissions: list) -> str:
+        if not submissions:
+            return "Aucune soumission finale encore."
+        lines = []
+        for i, s in enumerate(submissions, 1):
+            errors = s.errors_json or {}
+            errors_cat = errors.get("errors_categorized", [])
+            tests = errors.get("tests_results", [])
+            feedback = errors.get("feedback_general", errors.get("feedback", ""))
+            passed = sum(1 for t in tests if t.get("passed"))
+            total = len(tests)
+            error_types = [e.get("type", "") for e in errors_cat]
+            error_descs = [e.get("description", "") for e in errors_cat]
+            code_preview = s.code[:300].replace("\n", " | ") if s.code else ""
+            lines.append(
+                f"Soumission {i} — {s.created_at.date()}\n"
+                f"  Score : {s.score}/100\n"
+                f"  Tests : {passed}/{total} passés\n"
+                f"  Types d'erreurs : {', '.join(set(error_types)) or 'Aucune'}\n"
+                f"  Détail erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                f"  Feedback agent : {feedback[:200]}\n"
+                f"  Code soumis (extrait) : {code_preview}\n"
+                f"  Stdout : {(s.stdout or '')[:100]}\n"
+                f"  Stderr : {(s.stderr or '')[:100]}\n"
+            )
+        return "\n".join(lines)
+
+    sub_context = build_submission_context(final_submissions)
+
+    scores = [s.score for s in final_submissions if s.score is not None]
+    score_moyen = round(sum(scores) / len(scores), 1) if scores else None
+
+    progression = ""
+    if len(scores) >= 2:
+        diff = scores[0] - scores[-1]
+        if diff > 0:
+            progression = f"Progression positive : +{diff} points sur la période"
+        elif diff < 0:
+            progression = f"Régression : {diff} points sur la période"
+        else:
+            progression = "Score stable sur la période"
+
+    score_moyen_str = f"{score_moyen}/100" if score_moyen is not None else "Pas encore de soumission finale"
+    progression_str = progression or "Première évaluation"
+    points_faibles_str = ', '.join(points_faibles) if points_faibles else "Non encore détectés"
+    concepts_str = ', '.join(concepts) if concepts else "Non encore détectés"
 
     prompt = (
-        f"Tu es un assistant pédagogique expert.\n"
-        f"Génère un bilan pédagogique détaillé en français "
-        f"pour l'étudiant {student_result.first_name} {student_result.last_name}.\n\n"
-        f"Niveau actuel : {niveau}/5\n"
-        f"Points faibles : {', '.join(points_faibles) or 'Non détectés'}\n"
-        f"Concepts maîtrisés : {', '.join(concepts) or 'Aucun encore'}\n"
-        f"Nombre de soumissions : {len(submissions)}\n\n"
-        f"Historique récent :\n{sub_summary}\n\n"
-        f"Rédige un rapport structuré avec :\n"
-        f"1. Résumé de la progression générale\n"
-        f"2. Points forts observés\n"
-        f"3. Difficultés récurrentes avec exemples concrets\n"
-        f"4. Recommandations pédagogiques précises\n"
-        f"5. Objectifs suggérés pour la prochaine période\n\n"
-        f"Sois précis, bienveillant et constructif.\n"
-        f"Maximum 500 mots. Réponds uniquement en français."
+        f"Tu es un assistant pédagogique expert en analyse de code et en pédagogie informatique.\n\n"
+        f"Génère un bilan pédagogique détaillé et UTILE pour l'étudiant "
+        f"{student.first_name} {student.last_name}.\n\n"
+        f"DONNÉES IMPORTANTES À COMPRENDRE :\n"
+        f"- submission_type='submission' = évaluation officielle avec score → BASE DE TON ANALYSE\n"
+        f"- submission_type='execution' = test de code intermédiaire sans score → SIGNE POSITIF\n"
+        f"  d'engagement, ne jamais interpréter comme un travail non rendu ou une difficulté\n\n"
+        f"PROFIL ACTUEL :\n"
+        f"Niveau : {niveau}/5\n"
+        f"Score moyen (soumissions finales) : {score_moyen_str}\n"
+        f"Progression : {progression_str}\n"
+        f"Points faibles identifiés : {points_faibles_str}\n"
+        f"Concepts maîtrisés : {concepts_str}\n"
+        f"Tentatives d'exécution (engagement) : {exec_count}\n\n"
+        f"SOUMISSIONS FINALES DÉTAILLÉES :\n{sub_context}\n\n"
+        f"INSTRUCTIONS D'ANALYSE :\n\n"
+        f"Analyse le CODE SOUMIS et les ERREURS RÉELLES pour produire un rapport concret.\n\n"
+        f"1. RÉSUMÉ DE PROGRESSION :\n"
+        f"   Basé sur les scores réels. Mentionne positivement les {exec_count} "
+        f"tentatives d'exécution comme preuve d'engagement.\n\n"
+        f"2. POINTS FORTS :\n"
+        f"   Identifie ce qui est correct dans le code soumis. Sois précis — cite des éléments du code.\n\n"
+        f"3. DIFFICULTÉS RÉCURRENTES :\n"
+        f"   Pour chaque difficulté : nomme le concept, donne un exemple du code soumis, explique l'erreur.\n\n"
+        f"4. RECOMMANDATIONS PRÉCISES :\n"
+        f"   Pour chaque difficulté : recommandation concrète et réalisable. Pas de généralités.\n\n"
+        f"5. OBJECTIFS POUR LA PROCHAINE PÉRIODE :\n"
+        f"   2-3 objectifs SMART basés sur les vraies lacunes observées.\n\n"
+        f"RÈGLES :\n"
+        f"- Cite des éléments concrets du code soumis\n"
+        f"- Ne jamais interpréter score=None comme un échec\n"
+        f"- Sois encourageant mais honnête\n"
+        f"- Maximum 600 mots en français\n"
+        f"- Évite les généralités — chaque phrase doit apporter une information utile"
     )
 
     try:
@@ -395,7 +470,9 @@ async def generate_student_report(
         period_end=now,
         content=content,
         metrics_json={
-            "submissions_count": len(submissions),
+            "submissions_count": len(final_submissions),
+            "exec_count": exec_count,
+            "score_moyen": score_moyen,
             "niveau": niveau,
         },
     )
@@ -544,41 +621,76 @@ async def ask_about_student(
     )
     profile: StudentProfile | None = profile_res.scalar_one_or_none()
 
-    # Load last 10 submissions
-    sub_res = await db.execute(
+    # Final submissions only (official evaluations with score)
+    final_subs_result = await db.execute(
         select(Submission)
         .where(
             Submission.student_id == student_id,
             Submission.teacher_id == teacher.id,
+            Submission.submission_type == "submission",
         )
         .order_by(Submission.created_at.desc())
         .limit(10)
     )
-    submissions = sub_res.scalars().all()
+    final_submissions = final_subs_result.scalars().all()
 
-    score_moyen = None
-    if submissions:
-        scores = [s.score for s in submissions if s.score is not None]
-        score_moyen = round(sum(scores) / len(scores), 1) if scores else None
+    # Execution attempts count (positive engagement indicator)
+    exec_count_result = await db.execute(
+        select(func.count(Submission.id))
+        .where(
+            Submission.student_id == student_id,
+            Submission.teacher_id == teacher.id,
+            Submission.submission_type == "execution",
+        )
+    )
+    exec_count = exec_count_result.scalar() or 0
 
-    sub_summary = "\n".join(
-        f"- Soumission du {s.created_at.strftime('%d/%m/%Y')} : score {s.score or '—'}%"
-        for s in submissions[:5]
-    ) or "Aucune soumission récente"
-
-    points_faibles = ", ".join(profile.points_faibles) if profile and profile.points_faibles else "Non identifiés"
+    scores = [s.score for s in final_submissions if s.score is not None]
+    score_moyen = round(sum(scores) / len(scores), 1) if scores else None
     niveau = profile.niveau if profile else 1
 
+    def build_submission_context(submissions: list) -> str:
+        if not submissions:
+            return "Aucune soumission finale encore."
+        lines = []
+        for i, s in enumerate(submissions, 1):
+            errors = s.errors_json or {}
+            errors_cat = errors.get("errors_categorized", [])
+            tests = errors.get("tests_results", [])
+            feedback = errors.get("feedback_general", errors.get("feedback", ""))
+            passed = sum(1 for t in tests if t.get("passed"))
+            total = len(tests)
+            error_types = [e.get("type", "") for e in errors_cat]
+            error_descs = [e.get("description", "") for e in errors_cat]
+            code_preview = s.code[:300].replace("\n", " | ") if s.code else ""
+            lines.append(
+                f"Soumission {i} — {s.created_at.date()}\n"
+                f"  Score : {s.score}/100\n"
+                f"  Tests : {passed}/{total} passés\n"
+                f"  Types d'erreurs : {', '.join(set(error_types)) or 'Aucune'}\n"
+                f"  Détail erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                f"  Feedback agent : {feedback[:200]}\n"
+                f"  Code soumis (extrait) : {code_preview}\n"
+            )
+        return "\n".join(lines)
+
+    sub_context = build_submission_context(final_submissions)
+    score_moyen_str = f"{score_moyen}/100" if score_moyen is not None else "Pas de soumission finale"
+
     prompt = (
-        f"Tu es un assistant pédagogique expert. "
-        f"Voici le profil de l'étudiant {student.first_name} {student.last_name} :\n"
-        f"- Niveau : {niveau}/5\n"
-        f"- Score moyen : {score_moyen if score_moyen is not None else '—'}%\n"
-        f"- Points faibles : {points_faibles}\n"
-        f"- Dernières soumissions :\n{sub_summary}\n\n"
+        f"Tu es un assistant pédagogique expert.\n\n"
+        f"IMPORTANT — Contexte du système :\n"
+        f"- submission_type='execution' = test intermédiaire sans score, signe d'engagement positif\n"
+        f"- submission_type='submission' = évaluation finale avec score, base de l'analyse\n\n"
+        f"Profil de {student.first_name} {student.last_name} :\n"
+        f"Niveau : {niveau}/5\n"
+        f"Score moyen : {score_moyen_str}\n"
+        f"Tentatives d'exécution : {exec_count} (engagement positif)\n\n"
+        f"Soumissions finales analysées :\n{sub_context}\n\n"
         f"Question de l'enseignant : {body.question}\n\n"
-        f"Réponds en français, de façon concise (maximum 150 mots), "
-        f"avec des recommandations pédagogiques concrètes."
+        f"Réponds de façon PRÉCISE et UTILE.\n"
+        f"Appuie-toi sur les données réelles du code et des erreurs pour répondre.\n"
+        f"Maximum 200 mots en français."
     )
 
     from ai_engine.llm_factory import get_llm
@@ -593,3 +705,133 @@ async def ask_about_student(
     response_text = result.content if hasattr(result, "content") else str(result)
 
     return AskStudentResponse(response=response_text)
+
+
+# ── TP Monitor ────────────────────────────────────────────────────────────────
+
+@router.get("/generated-tps", response_model=list[GeneratedTPItem])
+async def list_generated_tps(
+    teacher: User = Depends(get_current_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> list[GeneratedTPItem]:
+    """Return all AI-generated TPs for students enrolled with this teacher."""
+    enroll_res = await db.execute(
+        select(StudentEnrollment.student_id).where(StudentEnrollment.teacher_id == teacher.id)
+    )
+    student_ids = [row[0] for row in enroll_res.all()]
+
+    if not student_ids:
+        return []
+
+    tp_res = await db.execute(
+        select(GeneratedTP)
+        .where(GeneratedTP.teacher_id == teacher.id)
+        .order_by(GeneratedTP.created_at.desc())
+        .limit(50)
+    )
+    tps = tp_res.scalars().all()
+
+    items: list[GeneratedTPItem] = []
+    for tp in tps:
+        student_res = await db.execute(select(User).where(User.id == tp.student_id))
+        student: User | None = student_res.scalar_one_or_none()
+        student_name = (
+            f"{student.first_name} {student.last_name}" if student else str(tp.student_id)
+        )
+
+        topic_res = await db.execute(select(Topic).where(Topic.id == tp.topic_id))
+        topic: Topic | None = topic_res.scalar_one_or_none()
+        topic_title = topic.title if topic else str(tp.topic_id)
+
+        sub_count_res = await db.execute(
+            select(func.count(Submission.id)).where(
+                Submission.tp_id == tp.id,
+                Submission.submission_type == "submission",
+            )
+        )
+        submissions_count = sub_count_res.scalar() or 0
+
+        items.append(
+            GeneratedTPItem(
+                tp_id=tp.id,
+                student_name=student_name,
+                topic_title=topic_title,
+                enonce_preview=(tp.enonce or "")[:300],
+                starter_code_preview=(tp.starter_code or "")[:200],
+                created_at=tp.created_at,
+                submissions_count=submissions_count,
+            )
+        )
+    return items
+
+
+@router.get("/submissions", response_model=list[TeacherSubmissionItem])
+async def list_teacher_submissions(
+    student_id: Optional[uuid.UUID] = None,
+    topic_id: Optional[uuid.UUID] = None,
+    min_score: Optional[int] = None,
+    max_score: Optional[int] = None,
+    teacher: User = Depends(get_current_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> list[TeacherSubmissionItem]:
+    """Return final submissions for all students enrolled with this teacher."""
+    query = (
+        select(Submission)
+        .where(
+            Submission.teacher_id == teacher.id,
+            Submission.submission_type == "submission",
+        )
+        .order_by(Submission.created_at.desc())
+        .limit(100)
+    )
+
+    if student_id is not None:
+        query = query.where(Submission.student_id == student_id)
+    if topic_id is not None:
+        query = query.where(Submission.tp_id == topic_id)
+    if min_score is not None:
+        query = query.where(Submission.score >= min_score)
+    if max_score is not None:
+        query = query.where(Submission.score <= max_score)
+
+    sub_res = await db.execute(query)
+    submissions = sub_res.scalars().all()
+
+    items: list[TeacherSubmissionItem] = []
+    for sub in submissions:
+        student_res = await db.execute(select(User).where(User.id == sub.student_id))
+        student: User | None = student_res.scalar_one_or_none()
+        student_name = (
+            f"{student.first_name} {student.last_name}" if student else str(sub.student_id)
+        )
+
+        topic_title = str(sub.tp_id)
+        tp_res = await db.execute(select(GeneratedTP).where(GeneratedTP.id == sub.tp_id))
+        tp: GeneratedTP | None = tp_res.scalar_one_or_none()
+        if tp:
+            topic_res = await db.execute(select(Topic).where(Topic.id == tp.topic_id))
+            topic: Topic | None = topic_res.scalar_one_or_none()
+            if topic:
+                topic_title = topic.title
+
+        errors = sub.errors_json or {}
+        tests = errors.get("tests_results", [])
+        errors_cat = errors.get("errors_categorized", [])
+        feedback = errors.get("feedback_general", errors.get("feedback", ""))
+        tests_passed = sum(1 for t in tests if t.get("passed"))
+
+        items.append(
+            TeacherSubmissionItem(
+                submission_id=sub.id,
+                student_name=student_name,
+                topic_title=topic_title,
+                score=sub.score,
+                code_preview=(sub.code or "")[:500],
+                feedback=feedback,
+                tests_passed=tests_passed,
+                tests_total=len(tests),
+                errors_categorized=errors_cat,
+                created_at=sub.created_at,
+            )
+        )
+    return items

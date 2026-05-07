@@ -19,6 +19,7 @@ import StudentResources from "@/pages/student/StudentResources";
 import TeacherDashboard from "@/pages/teacher/TeacherDashboard";
 import StudentManagement from "@/pages/teacher/StudentManagement";
 import TPManagement from "@/pages/teacher/TPManagement";
+import TPMonitor from "@/pages/teacher/TPMonitor";
 import RAGManagement from "@/pages/teacher/RAGManagement";
 import TeacherProfile from "@/pages/teacher/TeacherProfile";
 import TeacherReports from "@/pages/teacher/TeacherReports";
@@ -82,6 +83,7 @@ const AppRoutes = () => (
       <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
       <Route path="/teacher/students" element={<StudentManagement />} />
       <Route path="/teacher/tps" element={<TPManagement />} />
+      <Route path="/teacher/tp-monitor" element={<TPMonitor />} />
       <Route path="/teacher/rag" element={<RAGManagement />} />
       <Route path="/teacher/profile" element={<TeacherProfile />} />
       <Route path="/teacher/reports" element={<TeacherReports />} />

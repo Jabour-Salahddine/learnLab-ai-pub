@@ -6,7 +6,7 @@ import { useNotifications } from "@/context/NotificationContext";
 import {
   LayoutDashboard, BookOpen, History, User, Settings, LogOut,
   Bell, Moon, Sun, ChevronLeft, ChevronRight, Brain,
-  Users, Database, BarChart3, X, CheckCheck, Library,
+  Users, Database, BarChart3, X, CheckCheck, Library, Search,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ const teacherNav = [
   { label: "Vue d'ensemble", icon: LayoutDashboard, path: "/teacher/dashboard" },
   { label: "Mes Étudiants", icon: Users, path: "/teacher/students" },
   { label: "Gestion des TPs", icon: BookOpen, path: "/teacher/tps" },
+  { label: "Suivi des TPs", icon: Search, path: "/teacher/tp-monitor" },
   { label: "Documents RAG", icon: Database, path: "/teacher/rag" },
   { label: "Rapports IA", icon: BarChart3, path: "/teacher/reports" },
   { label: "Mon profil", icon: User, path: "/teacher/profile" },

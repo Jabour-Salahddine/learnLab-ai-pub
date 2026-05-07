@@ -111,3 +111,28 @@ class AskStudentRequest(BaseModel):
 
 class AskStudentResponse(BaseModel):
     response: str
+
+
+# ── TP Monitor ────────────────────────────────────────────────────────────────
+
+class GeneratedTPItem(BaseModel):
+    tp_id: uuid.UUID
+    student_name: str
+    topic_title: str
+    enonce_preview: str
+    starter_code_preview: str
+    created_at: datetime
+    submissions_count: int
+
+
+class TeacherSubmissionItem(BaseModel):
+    submission_id: uuid.UUID
+    student_name: str
+    topic_title: str
+    score: Optional[int]
+    code_preview: str
+    feedback: str
+    tests_passed: int
+    tests_total: int
+    errors_categorized: list[dict]
+    created_at: datetime

@@ -1,14 +1,12 @@
 """Analyst Agent — updates student profiles and generates weekly reports."""
 
-import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_engine.prompts.explainer_prompts import SYSTEM_ANALYST_REPORT
 from ai_engine.state import AgentState
 from app.models.report import Report
 from app.models.student_profile import StudentProfile
@@ -30,12 +28,13 @@ class AnalystAgent:
         student_id = uuid.UUID(state["student_id"])
         teacher_id = uuid.UUID(state["teacher_id"])
 
-        # Fetch last 10 submissions for this student/teacher pair
+        # Fetch last 10 final submissions (scored) for this student/teacher pair
         result = await self._db.execute(
             select(Submission)
             .where(
                 Submission.student_id == student_id,
                 Submission.teacher_id == teacher_id,
+                Submission.submission_type == "submission",
             )
             .order_by(Submission.created_at.desc())
             .limit(10)
@@ -95,61 +94,172 @@ class AnalystAgent:
         period_start = (now - timedelta(days=7)).date()
         period_end = now.date()
 
-        # Fetch submissions for the week
-        result = await db.execute(
+        # Final submissions only (scored evaluations)
+        final_result = await db.execute(
             select(Submission)
             .where(
                 Submission.student_id == s_id,
                 Submission.teacher_id == t_id,
-                Submission.created_at >= datetime.combine(period_start, datetime.min.time()),
+                Submission.submission_type == "submission",
+            )
+            .order_by(Submission.created_at.desc())
+            .limit(15)
+        )
+        final_submissions = final_result.scalars().all()
+
+        # Execution attempts (engagement indicator — not failures)
+        exec_count_result = await db.execute(
+            select(func.count(Submission.id))
+            .where(
+                Submission.student_id == s_id,
+                Submission.teacher_id == t_id,
+                Submission.submission_type == "execution",
             )
         )
-        submissions = result.scalars().all()
+        exec_count = exec_count_result.scalar() or 0
 
-        scores = [s.score for s in submissions if s.score is not None]
-        avg_score = round(sum(scores) / len(scores), 1) if scores else 0
-        max_score = max(scores) if scores else 0
+        scores = [s.score for s in final_submissions if s.score is not None]
+        avg_score = round(sum(scores) / len(scores), 1) if scores else None
+        max_score = max(scores) if scores else None
+
+        progression = ""
+        if len(scores) >= 2:
+            diff = scores[0] - scores[-1]
+            if diff > 0:
+                progression = f"Progression : +{diff} pts"
+            elif diff < 0:
+                progression = f"Régression : {diff} pts"
+            else:
+                progression = "Score stable"
+        elif len(scores) == 1:
+            progression = "Première évaluation"
 
         error_counts: dict[str, int] = {}
-        for sub in submissions:
+        for sub in final_submissions:
             for err in (sub.errors_json or {}).get("errors_categorized", []):
                 t = err.get("type", "Unknown")
                 error_counts[t] = error_counts.get(t, 0) + 1
-        error_types = ", ".join(
-            f"{k} ({v})" for k, v in sorted(error_counts.items(), key=lambda x: -x[1])
-        ) or "Aucune"
 
-        # Load student profile
+        error_types = ", ".join(
+            f"{k} ({v}x)"
+            for k, v in sorted(error_counts.items(), key=lambda x: -x[1])
+        ) or "Aucune erreur détectée"
+
+        def build_context(submissions: list) -> str:
+            if not submissions:
+                return "Aucune soumission finale sur la période."
+            lines = []
+            for i, s in enumerate(submissions, 1):
+                errors = s.errors_json or {}
+                errors_cat = errors.get("errors_categorized", [])
+                tests = errors.get("tests_results", [])
+                feedback = errors.get("feedback_general", "")
+                passed = sum(1 for t in tests if t.get("passed"))
+                total = len(tests)
+                error_descs = [e.get("description", "") for e in errors_cat]
+                code_preview = s.code[:400].replace("\n", " | ") if s.code else ""
+                lines.append(
+                    f"Soumission {i} — {s.created_at.date()}\n"
+                    f"  Score : {s.score}/100\n"
+                    f"  Tests : {passed}/{total} passés\n"
+                    f"  Erreurs : {' | '.join(error_descs) or 'Aucune'}\n"
+                    f"  Feedback : {feedback[:200]}\n"
+                    f"  Code (extrait) : {code_preview}\n"
+                    f"  Stderr : {(s.stderr or '')[:150]}\n"
+                )
+            return "\n".join(lines)
+
+        sub_context = build_context(final_submissions)
+
         profile_res = await db.execute(
             select(StudentProfile).where(StudentProfile.student_id == s_id)
         )
         profile = profile_res.scalar_one_or_none()
         niveau = profile.niveau if profile else 1
+        points_faibles = profile.points_faibles if profile else []
+        concepts = profile.concepts_maitrises if profile else []
 
         student_res = await db.execute(select(User).where(User.id == s_id))
         student = student_res.scalar_one_or_none()
-        student_name = f"{student.first_name} {student.last_name}" if student else student_id
-
-        system_prompt = SYSTEM_ANALYST_REPORT.format(
-            student_name=student_name,
-            period_start=period_start.isoformat(),
-            period_end=period_end.isoformat(),
-            submissions_count=len(submissions),
-            avg_score=avg_score,
-            max_score=max_score,
-            error_types=error_types,
-            niveau=niveau,
-            scores_history=str(scores[-10:]),
+        student_name = (
+            f"{student.first_name} {student.last_name}" if student else student_id
         )
 
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content="Génère le rapport."),
-        ]
-        response = await self._llm.ainvoke(messages)
-        report_content = response.content if hasattr(response, "content") else str(response)
+        prompt = f"""Tu es un analyste pédagogique expert
+en informatique et en pédagogie.
 
-        # Persist report
+Génère un bilan pédagogique détaillé et UTILE
+pour l'étudiant {student_name}.
+Période : {period_start} → {period_end}
+
+━━ COMPRENDRE LES DONNÉES ━━
+
+Deux types de soumissions existent dans le système :
+- Soumissions finales (avec score) → BASE DE TON ANALYSE
+- Tentatives d'exécution (sans score) → signe POSITIF
+  d'engagement. Ne jamais interpréter comme un échec
+  ou un travail non rendu.
+
+━━ PROFIL ACTUEL ━━
+Niveau : {niveau}/5
+Score moyen : {f"{avg_score}/100" if avg_score else "Pas encore évalué"}
+Score maximum : {f"{max_score}/100" if max_score else "—"}
+Progression : {progression}
+Points faibles identifiés : {", ".join(points_faibles) if points_faibles else "Non encore détectés"}
+Concepts maîtrisés : {", ".join(concepts) if concepts else "Non encore détectés"}
+Tentatives d'exécution : {exec_count} (engagement positif)
+Erreurs récurrentes : {error_types}
+
+━━ SOUMISSIONS FINALES DÉTAILLÉES ━━
+{sub_context}
+
+━━ INSTRUCTIONS D'ANALYSE ━━
+
+Analyse le CODE SOUMIS et les ERREURS RÉELLES.
+Sois concret et utile pour l'enseignant.
+
+IMPORTANT — Différences mineures de format :
+Si l'étudiant retourne "Woof!" au lieu de "Wouf",
+ou "Miaou!" au lieu de "Miaou", NE le signale PAS
+comme une difficulté ou un point faible.
+Ce sont des différences cosmétiques sans importance
+pédagogique. Concentre-toi sur la LOGIQUE du code,
+la STRUCTURE, et la compréhension des CONCEPTS.
+
+Génère un rapport structuré :
+
+1. RÉSUMÉ DE PROGRESSION (2-3 phrases) :
+   Score moyen, progression, engagement.
+   Mentionne positivement les tentatives d'exécution.
+
+2. POINTS FORTS (bullet points) :
+   Ce que l'étudiant maîtrise bien.
+   Cite des éléments concrets du code soumis.
+
+3. DIFFICULTÉS RÉELLES (bullet points) :
+   Uniquement des problèmes de LOGIQUE ou CONCEPT.
+   Jamais des différences de format de sortie.
+   Pour chaque difficulté : cite un exemple du code.
+
+4. RECOMMANDATIONS POUR L'ENSEIGNANT (2-3 actions) :
+   Concrètes et réalisables.
+   Basées sur les vraies lacunes observées.
+
+5. OBJECTIFS POUR LA PROCHAINE PÉRIODE :
+   2-3 objectifs SMART basés sur les lacunes réelles.
+
+Règles :
+- Maximum 600 mots en français
+- Chaque phrase doit apporter une info utile
+- Pas de généralités comme "l'étudiant a des difficultés"
+- Cite toujours des éléments concrets du code"""
+
+        messages = [HumanMessage(content=prompt)]
+        response = await self._llm.ainvoke(messages)
+        report_content = (
+            response.content if hasattr(response, "content") else str(response)
+        )
+
         report = Report(
             student_id=s_id,
             teacher_id=t_id,
@@ -159,9 +269,11 @@ class AnalystAgent:
             metrics_json={
                 "avg_score": avg_score,
                 "max_score": max_score,
-                "submissions_count": len(submissions),
+                "submissions_count": len(final_submissions),
+                "exec_count": exec_count,
                 "error_counts": error_counts,
                 "niveau": niveau,
+                "progression": progression,
             },
         )
         db.add(report)

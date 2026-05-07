@@ -23,7 +23,7 @@ en termes simples adaptés au niveau {student_level}.
 4. Adapte le vocabulaire au niveau {student_level}.
 5. Donne TOUJOURS un exemple de code concret lié à CET exercice.
 6. Termine par une question pour vérifier la compréhension.
-7. Maximum 150 mots.
+7. Maximum 200 mots.
 NE DONNE JAMAIS la solution complète du TP.
 """
 
