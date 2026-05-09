@@ -842,8 +842,8 @@ async def list_generated_tps(
                 tp_id=tp.id,
                 student_name=student_name,
                 topic_title=topic_title,
-                enonce_preview=(tp.enonce or "")[:300],
-                starter_code_preview=(tp.starter_code or "")[:200],
+                enonce_preview=(tp.enonce or "")[:3000],
+                starter_code_preview=(tp.starter_code or "")[:2000],
                 created_at=tp.created_at,
                 submissions_count=submissions_count,
             )
