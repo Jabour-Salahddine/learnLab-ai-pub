@@ -912,7 +912,7 @@ async def list_teacher_submissions(
                 student_name=student_name,
                 topic_title=topic_title,
                 score=sub.score,
-                code_preview=(sub.code or "")[:500],
+                code_preview=(sub.code or "")[:3000],
                 feedback=feedback,
                 tests_passed=tests_passed,
                 tests_total=len(tests),

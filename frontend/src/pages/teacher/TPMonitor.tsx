@@ -19,7 +19,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useStudents } from "@/hooks/useTeacher";
-import { Eye, BookOpen, ClipboardList } from "lucide-react";
+import { Eye, BookOpen, ClipboardList, Search } from "lucide-react";
 
 interface GeneratedTPItem {
   tp_id: string;
@@ -113,6 +113,22 @@ function EnoncesTab() {
   });
 
   const [selected, setSelected] = useState<GeneratedTPItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredData = (data ?? []).filter((tp) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const dateStr = new Date(tp.created_at).toLocaleDateString("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+    return (
+      tp.student_name.toLowerCase().includes(q) ||
+      tp.topic_title.toLowerCase().includes(q) ||
+      dateStr.includes(q)
+    );
+  });
 
   if (isLoading) {
     return (
@@ -134,70 +150,99 @@ function EnoncesTab() {
 
   return (
     <>
-      <div className="space-y-3">
-        {data.map((tp) => (
-          <div
-            key={tp.tp_id}
-            className="bg-card border border-border rounded-xl p-5 hover:border-primary/40 transition-colors"
-          >
-            <div className="flex items-start gap-3">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 ${avatarColor(tp.student_name)}`}>
-                {initials(tp.student_name)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-foreground text-sm">{tp.student_name}</span>
-                  <span className="text-muted-foreground text-xs">·</span>
-                  <span className="text-muted-foreground text-xs truncate">{tp.topic_title}</span>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5">{formatDate(tp.created_at)}</p>
-              </div>
-              <Badge variant="secondary" className="flex-shrink-0 text-xs">
-                {tp.submissions_count} soumission{tp.submissions_count !== 1 ? "s" : ""}
-              </Badge>
-            </div>
-
-            <p className="mt-3 text-sm text-muted-foreground line-clamp-3 leading-relaxed">
-              {tp.enonce_preview || "Aucun énoncé disponible."}
-            </p>
-
-            <div className="mt-3 flex justify-end">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setSelected(tp)}
-                className="gap-1.5 text-xs"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                Voir l'énoncé complet
-              </Button>
-            </div>
-          </div>
-        ))}
+      {/* Barre de recherche */}
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          placeholder="Rechercher par étudiant, topic ou date..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full h-9 pl-9 pr-3 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
       </div>
 
+      {filteredData.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          Aucun résultat pour cette recherche.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredData.map((tp) => (
+            <div
+              key={tp.tp_id}
+              className="bg-card border border-border rounded-xl p-5 hover:border-primary/40 transition-colors"
+            >
+              <div className="flex items-start gap-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 ${avatarColor(tp.student_name)}`}>
+                  {initials(tp.student_name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-foreground text-sm">{tp.student_name}</span>
+                    <span className="text-muted-foreground text-xs">·</span>
+                    <span className="text-muted-foreground text-xs truncate">{tp.topic_title}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{formatDate(tp.created_at)}</p>
+                </div>
+                <Badge variant="secondary" className="flex-shrink-0 text-xs">
+                  {tp.submissions_count} soumission{tp.submissions_count !== 1 ? "s" : ""}
+                </Badge>
+              </div>
+
+              <p className="mt-3 text-sm text-muted-foreground line-clamp-3 leading-relaxed">
+                {tp.enonce_preview || "Aucun énoncé disponible."}
+              </p>
+
+              <div className="mt-3 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelected(tp)}
+                  className="gap-1.5 text-xs"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Voir l'énoncé complet
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Modal énoncé complet — header et footer fixes, corps scrollable */}
       <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b">
             <DialogTitle className="text-base">
               TP de {selected?.student_name} — {selected?.topic_title}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 mt-2">
+
+          <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Énoncé</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                📋 Énoncé
+              </p>
               <div className="bg-muted/50 rounded-lg p-4 text-sm text-foreground leading-relaxed whitespace-pre-wrap">
                 {selected?.enonce_preview || "Aucun énoncé."}
               </div>
             </div>
+
             {selected?.starter_code_preview && (
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Code de départ</p>
-                <div className="bg-zinc-950 dark:bg-zinc-900 rounded-lg p-4 text-xs text-green-400 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto">
-                  {selected.starter_code_preview}
-                </div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  💻 Code de départ (starter code)
+                </p>
+                <pre className="overflow-x-auto overflow-y-auto whitespace-pre text-xs font-mono bg-zinc-950 text-green-400 rounded-lg p-4 max-h-64">
+                  <code>{selected.starter_code_preview}</code>
+                </pre>
               </div>
             )}
+          </div>
+
+          <div className="flex-shrink-0 px-6 py-4 border-t flex justify-end">
+            <Button variant="outline" onClick={() => setSelected(null)}>Fermer</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -212,6 +257,7 @@ function SubmissionsTab() {
   const [filterStudent, setFilterStudent] = useState<string>("all");
   const [filterMin, setFilterMin] = useState<string>("");
   const [filterMax, setFilterMax] = useState<string>("");
+  const [searchText, setSearchText] = useState("");
   const [selected, setSelected] = useState<TeacherSubmissionItem | null>(null);
 
   const params = new URLSearchParams();
@@ -224,6 +270,17 @@ function SubmissionsTab() {
     queryKey: ["teacher-submissions", filterStudent, filterMin, filterMax],
     queryFn: () => api.get(`/teacher/submissions${queryString ? `?${queryString}` : ""}`),
   });
+
+  const filteredData = (data ?? []).filter((sub) => {
+    if (!searchText.trim()) return true;
+    const q = searchText.toLowerCase();
+    return (
+      sub.student_name.toLowerCase().includes(q) ||
+      sub.topic_title.toLowerCase().includes(q)
+    );
+  });
+
+  const hasActiveFilter = filterStudent !== "all" || filterMin !== "" || filterMax !== "" || searchText !== "";
 
   return (
     <>
@@ -265,12 +322,29 @@ function SubmissionsTab() {
           />
         </div>
 
-        {(filterStudent !== "all" || filterMin !== "" || filterMax !== "") && (
+        {/* Barre de recherche texte libre */}
+        <div className="relative flex-1 min-w-48">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Rechercher par étudiant ou topic..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className="w-full h-9 pl-9 pr-3 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+
+        {hasActiveFilter && (
           <Button
             size="sm"
             variant="ghost"
             className="h-9 text-xs text-muted-foreground"
-            onClick={() => { setFilterStudent("all"); setFilterMin(""); setFilterMax(""); }}
+            onClick={() => {
+              setFilterStudent("all");
+              setFilterMin("");
+              setFilterMax("");
+              setSearchText("");
+            }}
           >
             Réinitialiser
           </Button>
@@ -286,9 +360,13 @@ function SubmissionsTab() {
           <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-40" />
           <p className="text-sm">Aucune soumission encore.</p>
         </div>
+      ) : filteredData.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          Aucun résultat pour cette recherche.
+        </div>
       ) : (
         <div className="space-y-3">
-          {data.map((sub) => (
+          {filteredData.map((sub) => (
             <div
               key={sub.submission_id}
               className="bg-card border border-border rounded-xl p-5 hover:border-primary/40 transition-colors"
@@ -337,21 +415,22 @@ function SubmissionsTab() {
         </div>
       )}
 
+      {/* Modal soumission — header et footer fixes, corps scrollable */}
       <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-base">
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b">
+            <DialogTitle className="text-base flex items-center gap-2 flex-wrap">
               Soumission de {selected?.student_name}
               {selected?.score !== null && selected?.score !== undefined && (
-                <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-bold ${scoreColor(selected.score)}`}>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${scoreColor(selected.score)}`}>
                   {selected.score}/100
                 </span>
               )}
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 mt-2">
-            <div className="flex gap-4 text-sm">
+          <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+            <div className="flex gap-4 text-sm flex-shrink-0">
               <span className="text-muted-foreground">Topic :</span>
               <span className="font-medium">{selected?.topic_title}</span>
               <span className="text-muted-foreground ml-auto">
@@ -361,25 +440,29 @@ function SubmissionsTab() {
 
             {selected?.code_preview && (
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Code soumis</p>
-                <div className="bg-zinc-950 dark:bg-zinc-900 rounded-lg p-4 text-xs text-green-400 font-mono leading-relaxed whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                  {selected.code_preview}
-                </div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  💻 Code soumis
+                </p>
+                <pre className="overflow-x-auto overflow-y-auto whitespace-pre text-xs font-mono bg-zinc-950 text-green-400 rounded-lg p-4 max-h-80">
+                  <code>{selected.code_preview}</code>
+                </pre>
               </div>
             )}
 
-            {selected?.feedback && (
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Feedback de l'Agent Évaluateur</p>
-                <div className="bg-muted/50 rounded-lg p-4 text-sm text-foreground leading-relaxed">
-                  {selected.feedback}
-                </div>
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                🤖 Feedback de l'Agent Évaluateur
+              </p>
+              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 text-sm text-foreground leading-relaxed whitespace-pre-wrap">
+                {selected?.feedback || "Aucun feedback disponible."}
               </div>
-            )}
+            </div>
 
             {selected?.errors_categorized && selected.errors_categorized.length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Erreurs catégorisées</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  ✅ Erreurs catégorisées
+                </p>
                 <div className="space-y-2">
                   {selected.errors_categorized.map((err, i) => (
                     <div key={i} className="flex items-start gap-2 text-sm">
@@ -390,6 +473,10 @@ function SubmissionsTab() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="flex-shrink-0 px-6 py-4 border-t flex justify-end">
+            <Button variant="outline" onClick={() => setSelected(null)}>Fermer</Button>
           </div>
         </DialogContent>
       </Dialog>
