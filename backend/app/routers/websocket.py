@@ -141,7 +141,7 @@ async def chat_endpoint(
             from ai_engine.llm_factory import get_llm
             from ai_engine.prompts.explainer_prompts import SYSTEM_EXPLAINER
             from rag_pipeline.retriever import RAGRetriever
-            from langchain_core.messages import HumanMessage, SystemMessage
+            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
             retriever = RAGRetriever()
             chunks = await retriever.search(
@@ -162,10 +162,15 @@ async def chat_endpoint(
             )
 
             llm = get_llm()
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=question),
-            ]
+            messages = [SystemMessage(content=system_prompt)]
+
+            for msg in chat_history[-6:]:
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                elif msg["role"] == "assistant":
+                    messages.append(AIMessage(content=msg["content"]))
+
+            messages.append(HumanMessage(content=question))
 
             full_response = ""
             async for chunk in llm.astream(messages):
