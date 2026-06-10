@@ -10,6 +10,7 @@ class AgentState(TypedDict):
     teacher_id: str
     tp_id: Optional[str]
     session_id: str
+    submission_id: Optional[str]
 
     # TP context
     topic_id: Optional[str]

@@ -28,6 +28,25 @@ class AnalystAgent:
         student_id = uuid.UUID(state["student_id"])
         teacher_id = uuid.UUID(state["teacher_id"])
 
+        # UPDATE the current submission with score + errors_json from AgentState
+        # (the submission was inserted partially before the graph was invoked)
+        submission_id = state.get("submission_id")
+        if submission_id:
+            sub_result = await self._db.execute(
+                select(Submission).where(
+                    Submission.id == uuid.UUID(submission_id)
+                )
+            )
+            sub_to_update = sub_result.scalar_one_or_none()
+            if sub_to_update:
+                sub_to_update.score = state.get("score")
+                sub_to_update.errors_json = {
+                    "errors_categorized": state.get("errors_categorized") or [],
+                    "tests_results": state.get("tests_results") or [],
+                    "feedback": state.get("agent_response") or "",
+                }
+                await self._db.commit()
+
         # Fetch last 10 final submissions (scored) for this student/teacher pair
         result = await self._db.execute(
             select(Submission)

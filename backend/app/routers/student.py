@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,51 +123,6 @@ async def _run_local(code: str) -> dict:
         os.unlink(tmp_path)
 
 
-async def _run_analyst_background(
-    student_id: str, teacher_id: str, graph
-) -> None:
-    """Fire-and-forget analyst update after submission."""
-    from ai_engine.state import AgentState
-    from app.database import AsyncSessionLocal
-
-    async with AsyncSessionLocal() as db:
-        from ai_engine.agents.analyst import AnalystAgent
-        from ai_engine.llm_factory import get_llm
-
-        analyst = AnalystAgent(get_llm(), db)
-        state: AgentState = {
-            "student_id": student_id,
-            "teacher_id": teacher_id,
-            "session_id": f"{student_id}:{teacher_id}",
-            "tp_id": None,
-            "topic_id": None,
-            "topic_title": None,
-            "topic_description": None,
-            "student_level": 1,
-            "student_weak_points": [],
-            "student_concepts_maitrisés": [],
-            "code_submitted": None,
-            "stdout": None,
-            "stderr": None,
-            "exit_code": None,
-            "generated_enonce": None,
-            "generated_starter_code": None,
-            "generated_tests": None,
-            "generated_hints": None,
-            "score": None,
-            "errors_categorized": None,
-            "tests_results": None,
-            "rag_chunks": None,
-            "chat_history": [],
-            "current_question": None,
-            "agent_response": None,
-            "current_agent": None,
-            "hint_level": 0,
-            "action": "analyze",
-            "error_message": None,
-        }
-        await analyst.update_profile(state)
-
 
 # ── GET /student/topics ────────────────────────────────────────────────────────
 
@@ -253,6 +208,7 @@ async def generate_tp(
         "agent_response": None,
         "current_agent": None,
         "hint_level": 0,
+        "submission_id": None,
         "action": "generate_tp",
         "error_message": None,
     }
@@ -405,7 +361,6 @@ async def submit_code(
     tp_id: uuid.UUID,
     body: SubmitCodeRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     student: User = Depends(get_current_student),
     db: AsyncSession = Depends(get_db),
 ) -> SubmitCodeResponse:
@@ -418,6 +373,25 @@ async def submit_code(
 
     # Execute in sandbox
     exec_result = await _run_piston(body.code, body.language)
+
+    # INSERT partial submission before graph invocation;
+    # score and errors_json will be updated after graph.ainvoke()
+    submission = Submission(
+        student_id=student.id,
+        tp_id=tp_id,
+        teacher_id=tp.teacher_id,
+        code=body.code,
+        stdout=exec_result["stdout"],
+        stderr=exec_result["stderr"],
+        exit_code=exec_result["exit_code"],
+        score=None,
+        errors_json={},
+        submission_type="submission",
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+    submission_id = str(submission.id)
 
     # Build state for evaluator
     from ai_engine.state import AgentState
@@ -450,6 +424,7 @@ async def submit_code(
         "agent_response": None,
         "current_agent": None,
         "hint_level": 0,
+        "submission_id": submission_id,
         "action": "evaluate",
         "error_message": None,
     }
@@ -464,34 +439,14 @@ async def submit_code(
     hint = result_state.get("agent_response")  # hint is set when score < 70
     hint_level = result_state.get("hint_level", 0)
 
-    # Persist submission
-    submission = Submission(
-        student_id=student.id,
-        tp_id=tp_id,
-        teacher_id=tp.teacher_id,
-        code=body.code,
-        stdout=exec_result["stdout"],
-        stderr=exec_result["stderr"],
-        exit_code=exec_result["exit_code"],
-        score=score,
-        errors_json={
-            "errors_categorized": errors,
-            "tests_results": tests_results,
-            "feedback": feedback,
-        },
-        submission_type="submission",
-    )
-    db.add(submission)
+    # UPDATE the partial submission with evaluation data from AgentState
+    submission.score = score
+    submission.errors_json = {
+        "errors_categorized": errors,
+        "tests_results": tests_results,
+        "feedback": feedback,
+    }
     await db.commit()
-    await db.refresh(submission)
-
-    # Background analyst update
-    background_tasks.add_task(
-        _run_analyst_background,
-        str(student.id),
-        str(tp.teacher_id),
-        graph,
-    )
 
     return SubmitCodeResponse(
         submission_id=submission.id,
@@ -551,6 +506,7 @@ async def get_hint(
         "agent_response": None,
         "current_agent": None,
         "hint_level": 0,
+        "submission_id": None,
         "action": "hint",
         "error_message": None,
     }

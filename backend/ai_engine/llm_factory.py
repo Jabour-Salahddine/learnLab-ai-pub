@@ -1,7 +1,8 @@
 """LLM factory — returns either a real ChatOpenAI or a deterministic mock."""
 
+import asyncio
 import json
-from typing import Any, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 import structlog
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -164,20 +165,52 @@ class MockChatModel(BaseChatModel):
             yield AIMessageChunk(content=word + " ")
 
 
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+
+# One shared semaphore for the entire FastAPI process.
+_LLM_SEMAPHORE = asyncio.Semaphore(5)
+
+
+class RateLimitedLLM:
+    """Wrapper around the real LLM that caps concurrent OpenAI calls.
+
+    All attributes not defined here are delegated to the underlying LLM via
+    __getattr__, preserving full LangChain compatibility (bind_tools, etc.).
+    """
+
+    def __init__(self, llm: Any) -> None:
+        self._llm = llm
+
+    async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
+        async with _LLM_SEMAPHORE:
+            return await self._llm.ainvoke(messages, **kwargs)
+
+    async def astream(self, messages: Any, **kwargs: Any) -> AsyncIterator[Any]:  # type: ignore[override]
+        """Hold the semaphore for the full duration of the stream."""
+        async with _LLM_SEMAPHORE:
+            async for chunk in self._llm.astream(messages, **kwargs):
+                yield chunk
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._llm, name)
+
+
 # ── Public factory ─────────────────────────────────────────────────────────────
 
 
-def get_llm() -> BaseChatModel:
+def get_llm() -> RateLimitedLLM:
     """Return the appropriate LLM based on the configured API key."""
     if settings.openai_api_key.startswith("sk-placeholder"):
         logger.warning("llm_mock_mode_active")
-        return MockChatModel()
+        return RateLimitedLLM(MockChatModel())
 
     from langchain_openai import ChatOpenAI
 
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.7,
-        api_key=settings.openai_api_key,
-        streaming=True,
+    return RateLimitedLLM(
+        ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            api_key=settings.openai_api_key,
+            streaming=True,
+        )
     )
