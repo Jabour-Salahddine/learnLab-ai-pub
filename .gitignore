@@ -11,6 +11,10 @@
 *.cert
 secrets/
 
+# ─── Claude Code (assistant local) ─────────────────────
+CLAUDE.md
+.claude/
+
 # ─── Python ────────────────────────────────────────────
 __pycache__/
 *.py[cod]
